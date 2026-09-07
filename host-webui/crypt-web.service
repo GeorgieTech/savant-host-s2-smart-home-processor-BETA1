@@ -19,6 +19,8 @@ Environment=PULSE_SERVER=unix:/run/pulse/native
 Environment=PULSE_SINK=@DEFAULT_SINK@
 Environment=SSC_HOST=192.168.1.136
 Environment=SSC_PORT=23
+Environment=SSC14_HOST=192.168.1.136
+Environment=SSC12_HOST=192.168.1.138
 
 [Install]
 WantedBy=multi-user.target

@@ -14,15 +14,13 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from player import HostPlayer, MUSIC_DIR
-from ssc import RELAY_COUNT, SscClient
+from ssc import SscHub
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
 MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD", str(400 * 1024 * 1024)))
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._+\- ()\[\]]+")
-SSC_HOST = os.environ.get("SSC_HOST", "192.168.1.136")
-SSC_PORT = int(os.environ.get("SSC_PORT", "23"))
 
 PAGES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -30,6 +28,10 @@ PAGES = {
     "/controls": ("controls.html", "text/html; charset=utf-8"),
     "/controls.html": ("controls.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/icon.png": ("icon.png", "image/png"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
 }
 
 
@@ -97,18 +99,30 @@ def _as_bool(val):
     raise ValueError("need true or false")
 
 
-def _relay_port(body):
+def _relay_port(body, relay_count):
     if body.get("relay") not in (None, ""):
         n = int(body["relay"])
-        if 1 <= n <= RELAY_COUNT:
+        if 1 <= n <= relay_count:
             return n - 1
-        raise ValueError("relay must be 1-%d" % RELAY_COUNT)
+        raise ValueError("relay must be 1-%d" % relay_count)
     if body.get("port") not in (None, ""):
         n = int(body["port"])
-        if 0 <= n < RELAY_COUNT:
+        if 0 <= n < relay_count:
             return n
-        raise ValueError("port must be 0-%d" % (RELAY_COUNT - 1))
-    raise ValueError("need relay 1-7 or port 0-6")
+        raise ValueError("port must be 0-%d" % (relay_count - 1))
+    raise ValueError("need relay 1-%d or port 0-%d" % (relay_count, relay_count - 1))
+
+
+def _ssc_parts(path):
+    if path == "/api/ssc":
+        return None, None
+    if not path.startswith("/api/ssc/"):
+        return None, None
+    rest = path[len("/api/ssc/"):]
+    bits = [b for b in rest.split("/") if b]
+    if not bits:
+        return None, None
+    return bits[0], (bits[1] if len(bits) > 1 else None)
 
 
 def _on_flag(body):
@@ -216,7 +230,7 @@ class CryptApp(object):
 
 
 APP = CryptApp()
-SSC = SscClient(SSC_HOST, SSC_PORT)
+HUB = SscHub()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -262,8 +276,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/ssc":
                 force = "fresh=1" in qs or "force=1" in qs
-                self._send(200, SSC.snapshot(force=force))
+                self._send(200, HUB.snapshot_all(force=force))
                 return
+            if raw_path.startswith("/api/ssc/"):
+                devid, action = _ssc_parts(raw_path)
+                if devid and action is None:
+                    force = "fresh=1" in qs or "force=1" in qs
+                    try:
+                        self._send(200, HUB.get(devid).snapshot(force=force))
+                    except KeyError:
+                        self._send(404, {"ok": False, "error": "unknown expander"})
+                    return
             self._send(404, {"error": "not found"})
         except Exception:
             traceback.print_exc()
@@ -313,23 +336,32 @@ class Handler(BaseHTTPRequestHandler):
                 ok = APP.delete_name(name)
                 self._send(200 if ok else 400, {"ok": ok})
                 return
-            if path == "/api/ssc/relay":
+            if path in ("/api/ssc/relay", "/api/ssc/relays") or path.startswith("/api/ssc/"):
                 try:
-                    port = _relay_port(body)
-                    on = _on_flag(body)
-                    snap = SSC.set_relay(port, on)
-                    self._send(200 if snap.get("ok") else 502, snap)
+                    if path == "/api/ssc/relay":
+                        client = HUB.get("ssc14")
+                        action = "relay"
+                    elif path == "/api/ssc/relays":
+                        client = HUB.get("ssc14")
+                        action = "relays"
+                    else:
+                        devid, action = _ssc_parts(path)
+                        client = HUB.get(devid)
+                    if action == "relay":
+                        port = _relay_port(body, client.relay_count)
+                        snap = client.set_relay(port, _on_flag(body))
+                        self._send(200 if snap.get("ok") else 502, snap)
+                        return
+                    if action == "relays":
+                        snap = client.set_all(_on_flag(body))
+                        self._send(200 if snap.get("ok") else 502, snap)
+                        return
+                except KeyError as exc:
+                    self._send(404, {"ok": False, "error": str(exc)})
+                    return
                 except Exception as exc:
                     self._send(400, {"ok": False, "error": str(exc)})
-                return
-            if path == "/api/ssc/relays":
-                try:
-                    on = _on_flag(body)
-                    snap = SSC.set_all(on)
-                    self._send(200 if snap.get("ok") else 502, snap)
-                except Exception as exc:
-                    self._send(400, {"ok": False, "error": str(exc)})
-                return
+                    return
             self._send(404, {"error": "not found"})
         except Exception:
             traceback.print_exc()

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""SSC-0014 telnet client. Python 3.8 stdlib only.
+"""SSC telnet clients. Python 3.8 stdlib only.
 
-Talks to the SmartControl 14 CLI on port 23. Whitelist is show + relay
-on/off for ports 0-6 (relays 1-7). Never sends ip/mac/reset/gpio/etc.
+Whitelist is show + relay on/off. Never sends ip/mac/reset/gpio/etc.
 """
 from __future__ import print_function
 
@@ -14,17 +13,34 @@ import time
 
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 
-RELAY_COUNT = 7
-DEFAULT_HOST = os.environ.get("SSC_HOST", "192.168.1.136")
-DEFAULT_PORT = int(os.environ.get("SSC_PORT", "23"))
+DEFAULT_DEVICES = (
+    {
+        "id": "ssc14",
+        "model": "SSC-0014",
+        "title": "SmartControl 14",
+        "host": os.environ.get("SSC14_HOST", os.environ.get("SSC_HOST", "192.168.1.136")),
+        "port": int(os.environ.get("SSC14_PORT", os.environ.get("SSC_PORT", "23"))),
+        "relays": 7,
+    },
+    {
+        "id": "ssc12",
+        "model": "SSC-0012",
+        "title": "SmartControl 12",
+        "host": os.environ.get("SSC12_HOST", "192.168.1.138"),
+        "port": int(os.environ.get("SSC12_PORT", "23")),
+        "relays": 2,
+        "timeout": 2.5,
+    },
+)
 
-_ALLOWED = re.compile(r"^(show|relay on [0-6]|relay off [0-6])$")
+_ALLOWED = re.compile(r"^(show|relay on [0-9]|relay off [0-9])$")
 _RE_FW = re.compile(r"FW:\s*([0-9.:]+),\s*BL:\s*([0-9.:]+)")
 _RE_UID = re.compile(r"UID:\s*([0-9A-Fa-f]+),\s*S/N:\s*([0-9A-Za-z]+),\s*P/N:\s*([0-9A-Za-z._-]+)")
 _RE_NET = re.compile(r"Network is UP:\s*([0-9.]+)\s*\(([^)]+)\)")
 _RE_UP = re.compile(r"MCU Uptime:\s*([^\r\n]+?)(?:\s{2,}|\s+\d+\s+total)")
 _RE_RELAY = re.compile(r"Relay Status:\s*([0-9 ]+)")
 _RE_COUNTS = re.compile(r"Counts:\s*([0-9 ]+)")
+_RE_MODEL = re.compile(r"SSC-00[0-9]{2}")
 
 
 def _process_iac(data, pending):
@@ -71,19 +87,21 @@ def _process_iac(data, pending):
     return bytes(out), bytes(replies), buf[i:]
 
 
-def _ints(blob, n=RELAY_COUNT):
+def _ints(blob, n):
     vals = []
     for tok in (blob or "").split():
         try:
             vals.append(int(tok))
         except ValueError:
             continue
+    if n is None:
+        return vals
     while len(vals) < n:
         vals.append(0)
     return vals[:n]
 
 
-def parse_show(text):
+def parse_show(text, relay_count=None, default_model="SSC"):
     fw = bl = uid = sn = pn = ip = mode = uptime = ""
     m = _RE_FW.search(text)
     if m:
@@ -97,24 +115,33 @@ def parse_show(text):
     m = _RE_UP.search(text)
     if m:
         uptime = m.group(1).strip().rstrip(".")
-    status = [0] * RELAY_COUNT
+    status = []
     m = _RE_RELAY.search(text)
     if m:
-        status = _ints(m.group(1))
-    counts = [0] * RELAY_COUNT
+        status = _ints(m.group(1), None)
+    counts = []
     m = _RE_COUNTS.search(text)
     if m:
-        counts = _ints(m.group(1))
+        counts = _ints(m.group(1), None)
+    n = relay_count if relay_count else (len(status) or 0)
+    if not n:
+        n = 0
+    status = _ints(" ".join(str(x) for x in status), n)
+    counts = _ints(" ".join(str(x) for x in counts), n)
     relays = []
-    for port in range(RELAY_COUNT):
+    for port in range(n):
         relays.append({
             "relay": port + 1,
             "port": port,
             "on": bool(status[port]),
             "count": counts[port],
         })
+    model = default_model
+    m = _RE_MODEL.search(text)
+    if m:
+        model = m.group(0)
     return {
-        "model": "SSC-0014",
+        "model": model,
         "fw": fw,
         "bl": bl,
         "uid": uid,
@@ -129,10 +156,14 @@ def parse_show(text):
 
 
 class SscClient(object):
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=4.0):
-        self.host = host
-        self.port = int(port)
-        self.timeout = float(timeout)
+    def __init__(self, spec):
+        self.id = spec["id"]
+        self.model = spec.get("model") or "SSC"
+        self.title = spec.get("title") or self.model
+        self.host = spec["host"]
+        self.port = int(spec.get("port") or 23)
+        self.relay_count = int(spec.get("relays") or 0)
+        self.timeout = float(spec.get("timeout") or 4.0)
         self.lock = threading.Lock()
         self._sock = None
         self._iac = b""
@@ -144,6 +175,32 @@ class SscClient(object):
         with self.lock:
             self._close()
 
+    def _offline(self, err):
+        self.last_error = err
+        return {
+            "ok": False,
+            "online": False,
+            "id": self.id,
+            "title": self.title,
+            "host": self.host,
+            "port": self.port,
+            "model": self.model,
+            "fw": "",
+            "bl": "",
+            "uid": "",
+            "sn": "",
+            "pn": "",
+            "ip": "",
+            "dhcp": False,
+            "net_mode": "",
+            "uptime": "",
+            "relays": [
+                {"relay": i + 1, "port": i, "on": False, "count": 0}
+                for i in range(self.relay_count)
+            ],
+            "error": err,
+        }
+
     def snapshot(self, force=False):
         with self.lock:
             now = time.time()
@@ -153,48 +210,31 @@ class SscClient(object):
                 text = self._cmd("show", wait=6.0)
                 if "PASS" not in text:
                     raise IOError("show did not PASS")
-                info = parse_show(text)
+                info = parse_show(text, self.relay_count, self.model)
                 snap = {
                     "ok": True,
                     "online": True,
+                    "id": self.id,
+                    "title": self.title,
                     "host": self.host,
                     "port": self.port,
                     "error": None,
                 }
                 snap.update(info)
+                if not snap.get("model"):
+                    snap["model"] = self.model
                 self._cache = snap
                 self._cache_at = time.time()
                 self.last_error = None
                 return dict(snap)
             except Exception as exc:
-                self.last_error = str(exc)
                 self._close()
-                return {
-                    "ok": False,
-                    "online": False,
-                    "host": self.host,
-                    "port": self.port,
-                    "model": "SSC-0014",
-                    "fw": "",
-                    "bl": "",
-                    "uid": "",
-                    "sn": "",
-                    "pn": "",
-                    "ip": "",
-                    "dhcp": False,
-                    "net_mode": "",
-                    "uptime": "",
-                    "relays": [
-                        {"relay": i + 1, "port": i, "on": False, "count": 0}
-                        for i in range(RELAY_COUNT)
-                    ],
-                    "error": self.last_error,
-                }
+                return self._offline(str(exc))
 
     def set_relay(self, port, on):
         port = int(port)
-        if port < 0 or port >= RELAY_COUNT:
-            raise ValueError("relay port must be 0-6")
+        if port < 0 or port >= self.relay_count:
+            raise ValueError("relay port must be 0-%d" % (self.relay_count - 1))
         verb = "on" if on else "off"
         with self.lock:
             text = self._cmd("relay %s %d" % (verb, port), wait=4.0)
@@ -207,8 +247,7 @@ class SscClient(object):
     def set_all(self, on):
         verb = "on" if on else "off"
         with self.lock:
-            last = ""
-            for port in range(RELAY_COUNT):
+            for port in range(self.relay_count):
                 last = self._cmd("relay %s %d" % (verb, port), wait=4.0)
                 if "PASS" not in last or "FAIL" in last:
                     raise IOError("relay %s %d failed" % (verb, port))
@@ -229,6 +268,10 @@ class SscClient(object):
         if self._sock is not None:
             return
         sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
         sock.settimeout(0.25)
         self._sock = sock
         self._iac = b""
@@ -271,6 +314,10 @@ class SscClient(object):
     def _cmd(self, line, wait=5.0):
         if not _ALLOWED.match(line):
             raise ValueError("refusing SSC command: %s" % line)
+        if line.startswith("relay "):
+            port = int(line.rsplit(" ", 1)[1])
+            if port < 0 or port >= self.relay_count:
+                raise ValueError("relay port out of range")
         try:
             self._ensure()
             self._send((line + "\r\n").encode("ascii"))
@@ -280,3 +327,47 @@ class SscClient(object):
             self._ensure()
             self._send((line + "\r\n").encode("ascii"))
             return self._read(max_wait=wait, idle=0.28, need_prompt=True)
+
+
+class SscHub(object):
+    def __init__(self, devices=None):
+        self.clients = []
+        self.by_id = {}
+        for spec in devices or DEFAULT_DEVICES:
+            client = SscClient(spec)
+            self.clients.append(client)
+            self.by_id[client.id] = client
+
+    def get(self, devid):
+        client = self.by_id.get(devid)
+        if client is None:
+            raise KeyError("unknown expander %s" % devid)
+        return client
+
+    def snapshot_all(self, force=False):
+        box = {}
+
+        def run(client):
+            box[client.id] = client.snapshot(force=force)
+
+        threads = []
+        for client in self.clients:
+            t = threading.Thread(target=run, args=(client,))
+            t.daemon = True
+            t.start()
+            threads.append((t, client))
+        for t, client in threads:
+            t.join(12.0)
+            if t.is_alive() and client.id not in box:
+                box[client.id] = client._offline("timeout")
+        devices = []
+        for client in self.clients:
+            snap = box.get(client.id) or client._offline("no snapshot")
+            devices.append(snap)
+        online = sum(1 for d in devices if d.get("online"))
+        return {
+            "ok": True,
+            "online": online,
+            "count": len(devices),
+            "devices": devices,
+        }

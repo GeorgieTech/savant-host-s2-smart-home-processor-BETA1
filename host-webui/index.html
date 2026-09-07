@@ -2,51 +2,61 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CRYPT — S2 Processor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07060a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CRYPT">
+<title>CRYPT — Music</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/crypt.css">
 </head>
 <body>
-  <header>
-    <h1>CRYPT</h1>
-    <div class="sub">S2 Smart Home Processor · BETA1</div>
-    <div class="hostline" id="hostline">summoning the host…</div>
-    <nav class="nav">
-      <a class="on" href="/">The Vault</a>
-      <a href="/controls">The Relays</a>
-    </nav>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1>CRYPT</h1>
+      <div class="sub">S2 · BETA1</div>
+    </div>
+    <div class="hostline" id="hostline">Connecting…</div>
   </header>
-  <main>
-    <section class="panel">
+  <main class="page">
+    <section class="card">
       <h2>Now playing</h2>
-      <div class="now" id="now">silence in the vault</div>
-      <div class="meta" id="meta"></div>
+      <div class="now" id="now">Nothing queued</div>
+      <div class="meta" id="meta">0:00 / 0:00</div>
       <div class="bar" id="seek"><span id="fill"></span></div>
-      <div class="row">
+      <div class="controls">
         <button onclick="api('/api/prev')">Prev</button>
         <button class="primary" id="playbtn" onclick="toggle()">Play</button>
         <button onclick="api('/api/stop')">Stop</button>
         <button onclick="api('/api/next')">Next</button>
-        <label>Volume <input id="vol" type="range" min="0" max="100" value="100" onchange="setVol(this.value)"></label>
       </div>
+      <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100" onchange="setVol(this.value)"></div>
       <div class="err" id="err"></div>
     </section>
-    <section class="panel">
-      <h2>Offerings</h2>
-      <p class="meta">Lay MP3, FLAC, Opus, OGG, WAV, M4A, or AAC upon the slab. They rest on this host’s eMMC and leave through TOSLINK.</p>
+    <section class="card">
+      <h2>Upload</h2>
+      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this host and play out TOSLINK.</p>
       <div class="drop" id="drop">
-        Drag files here, or
+        Drop files here, or
         <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
         <div id="upstat"></div>
       </div>
     </section>
-    <section class="panel">
-      <h2>The vault</h2>
+    <section class="card">
+      <h2>Library</h2>
       <div class="meta" id="disk"></div>
       <ul class="tracks" id="tracks"></ul>
     </section>
   </main>
-  <footer>SHR-S2 DualLite · optical sepulchre · SSC-0014 coils · not affiliated with Savant Systems</footer>
+  <nav class="tabbar">
+    <a class="on" href="/">Music</a>
+    <a href="/controls">Relays</a>
+  </nav>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
 let last = {};
@@ -61,6 +71,11 @@ function pretty(n) {
   if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
   if (n > 1e6) return (n/1e6).toFixed(1) + " MB";
   return Math.round(n/1024) + " KB";
+}
+function esc(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
 }
 async function api(path, body) {
   const opt = body === undefined ? { method: "POST" } : {
@@ -82,7 +97,7 @@ async function toggle() {
 async function playName(name) { await api("/api/play", { name }); tick(); }
 async function delName(name, ev) {
   ev.stopPropagation();
-  if (!confirm("Banish “" + name + "” from the vault?")) return;
+  if (!confirm("Delete “" + name + "” from the library?")) return;
   await api("/api/delete", { name });
   tick();
 }
@@ -105,16 +120,16 @@ $("file").addEventListener("change", e => upload(e.target.files));
 async function upload(files) {
   const list = Array.from(files || []);
   for (const f of list) {
-    $("upstat").textContent = "entombing " + f.name + "…";
+    $("upstat").textContent = "Uploading " + f.name + "…";
     const fd = new FormData();
     fd.append("file", f, f.name);
     try {
       const r = await fetch("/api/upload", { method: "POST", body: fd });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "failed");
-      $("upstat").textContent = "laid to rest: " + j.name;
+      $("upstat").textContent = "Saved " + j.name;
     } catch (err) {
-      $("upstat").textContent = "rejected: " + err.message;
+      $("upstat").textContent = "Rejected: " + err.message;
     }
   }
   tick();
@@ -126,33 +141,33 @@ async function tick() {
     const lib = await (await fetch("/api/library")).json();
     last = Object.assign({}, st, lib);
     const p = st.player || {};
-    $("hostline").textContent = (st.host || "") + " · " + (st.model || "SHR-S2") + " · TOSLINK";
-    $("now").textContent = p.name || "silence in the vault";
+    $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
+    $("now").textContent = p.name || "Nothing queued";
     $("meta").textContent = fmt(p.position) + " / " + fmt(p.duration);
     $("fill").style.width = (p.duration ? (100 * p.position / p.duration) : 0) + "%";
     $("playbtn").textContent = p.playing ? "Pause" : "Play";
     $("err").textContent = p.error || "";
     $("vol").value = st.volume == null ? 100 : st.volume;
     const d = lib.disk || st.disk || {};
-    $("disk").textContent = pretty(d.used || 0) + " bound · " + pretty(d.free || 0) + " still hollow";
+    $("disk").textContent = pretty(d.used || 0) + " used · " + pretty(d.free || 0) + " free";
     const ul = $("tracks");
     ul.innerHTML = "";
-    (lib.tracks || []).forEach((t, i) => {
+    (lib.tracks || []).forEach((t) => {
       const li = document.createElement("li");
       if (t.name === p.name) li.className = "on";
-      li.innerHTML = "<span>" + t.name + "</span><span>" + pretty(t.size) + "</span>";
+      li.innerHTML = "<span class='name'>" + esc(t.name) + "</span><span class='size'>" + pretty(t.size) + "</span>";
       const b = document.createElement("button");
-      b.textContent = "Banish";
+      b.textContent = "Delete";
       b.onclick = (e) => delName(t.name, e);
       li.appendChild(b);
       li.onclick = () => playName(t.name);
       ul.appendChild(li);
     });
     if (!(lib.tracks || []).length) {
-      ul.innerHTML = "<li><span>the vault is empty</span></li>";
+      ul.innerHTML = "<li><span class='name'>Library is empty</span></li>";
     }
   } catch (e) {
-    $("err").textContent = "the host does not answer";
+    $("err").textContent = "Host is not answering";
   }
 }
 tick();
