@@ -14,10 +14,11 @@ Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident
 - Upload MP3 / FLAC / Opus / OGG / WAV / M4A / AAC to `/data/music`
 - Play through the SHR-S2 **TOSLINK** jack (`ffmpeg` → `paplay` → Pulse → `imx-spdif`)
 - Play / pause / seek / next / prev / volume / delete
+- **The Relays** page drives the **SSC-0014** at `192.168.1.136` (telnet CLI, relays 1–7 / ports 0–6)
 
 No AirPlay, Spotify, DLNA, or NAS in BETA1. DualLite + 1 GB RAM.
 
-Live UI: [http://192.168.1.179/](http://192.168.1.179/)
+Live UI: [http://192.168.1.179/](http://192.168.1.179/) · Relays: [http://192.168.1.179/controls](http://192.168.1.179/controls)
 
 | Piece | Path |
 |---|---|

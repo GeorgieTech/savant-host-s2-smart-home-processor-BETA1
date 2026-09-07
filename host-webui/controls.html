@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRYPT — Relays</title>
+<link rel="stylesheet" href="/crypt.css">
+</head>
+<body>
+  <header>
+    <h1>CRYPT</h1>
+    <div class="sub">S2 Smart Home Processor · BETA1</div>
+    <div class="hostline" id="hostline">reaching for the expander…</div>
+    <nav class="nav">
+      <a href="/">The Vault</a>
+      <a class="on" href="/controls">The Relays</a>
+    </nav>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>SmartControl 14</h2>
+      <p class="meta" id="ident">SSC-0014 at 192.168.1.136 · telnet CLI, ports 0–6</p>
+      <div class="row">
+        <span class="badge dead" id="badge">unknown</span>
+        <button onclick="tick(true)">Refresh</button>
+        <button class="primary" id="allon" onclick="setAll(true)">Energize all</button>
+        <button class="release" id="alloff" onclick="setAll(false)">Release all</button>
+      </div>
+      <div class="err" id="err"></div>
+      <div class="okline" id="ok"></div>
+    </section>
+    <section class="panel">
+      <h2>The seven coils</h2>
+      <p class="meta">Each contact is a dry relay on the expander. Energize closes it. Release returns it to rest. Relay 1 is CLI port 0.</p>
+      <div class="coils" id="coils"></div>
+    </section>
+  </main>
+  <footer>SHR-S2 DualLite · SSC-0014 · not affiliated with Savant Systems</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+let busy = false;
+let last = {};
+
+function coilRow(r) {
+  const on = !!r.on;
+  const el = document.createElement("div");
+  el.className = "coil" + (on ? " hot" : "");
+  el.innerHTML =
+    '<div class="lamp"></div>' +
+    '<div><div class="name">Relay ' + r.relay + '</div>' +
+    '<div class="port">port ' + r.port + (on ? " · energized" : " · at rest") +
+    (r.count != null ? " · count " + r.count : "") + "</div></div>";
+  const onBtn = document.createElement("button");
+  onBtn.className = "primary";
+  onBtn.textContent = "On";
+  onBtn.disabled = busy || on;
+  onBtn.onclick = () => setRelay(r.relay, true);
+  const offBtn = document.createElement("button");
+  offBtn.className = "release";
+  offBtn.textContent = "Off";
+  offBtn.disabled = busy || !on;
+  offBtn.onclick = () => setRelay(r.relay, false);
+  el.appendChild(onBtn);
+  el.appendChild(offBtn);
+  return el;
+}
+
+function render(st) {
+  last = st || {};
+  const online = !!st.online;
+  $("badge").textContent = online ? "uplinked" : "no answer";
+  $("badge").className = "badge " + (online ? "live" : "dead");
+  const bits = ["SSC-0014", st.host || "192.168.1.136"];
+  if (st.uid) bits.push("UID " + st.uid);
+  if (st.sn) bits.push("S/N " + st.sn);
+  if (st.fw) bits.push("FW " + st.fw);
+  if (st.uptime) bits.push(st.uptime);
+  $("ident").textContent = bits.join(" · ");
+  $("hostline").textContent = online
+    ? (st.ip || st.host) + " · seven coils on the wire"
+    : "the expander does not answer";
+  $("err").textContent = st.error || "";
+  const box = $("coils");
+  box.innerHTML = "";
+  const relays = st.relays && st.relays.length ? st.relays : [1,2,3,4,5,6,7].map(n => ({relay:n, port:n-1, on:false}));
+  relays.forEach(r => box.appendChild(coilRow(r)));
+  $("allon").disabled = busy || !online;
+  $("alloff").disabled = busy || !online;
+}
+
+function freeze(on) {
+  busy = on;
+  document.querySelectorAll("button").forEach(b => {
+    if (b.id === undefined) return;
+  });
+  $("allon").disabled = on || !last.online;
+  $("alloff").disabled = on || !last.online;
+  document.querySelectorAll(".coil button").forEach(b => { b.disabled = on; });
+}
+
+async function tick(force) {
+  try {
+    const r = await fetch("/api/ssc" + (force ? "?fresh=1" : ""));
+    const st = await r.json();
+    render(st);
+  } catch (e) {
+    render({ online: false, error: "the host does not answer", relays: [] });
+  }
+}
+
+async function setRelay(n, on) {
+  freeze(true);
+  $("ok").textContent = (on ? "energizing" : "releasing") + " relay " + n + "…";
+  try {
+    const r = await fetch("/api/ssc/relay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ relay: n, on: on })
+    });
+    const st = await r.json();
+    if (!st.ok) throw new Error(st.error || "failed");
+    $("ok").textContent = "relay " + n + (on ? " energized" : " at rest");
+    render(st);
+  } catch (e) {
+    $("err").textContent = e.message;
+    await tick(true);
+  } finally {
+    freeze(false);
+    render(last);
+  }
+}
+
+async function setAll(on) {
+  freeze(true);
+  $("ok").textContent = on ? "energizing all seven…" : "releasing all seven…";
+  try {
+    const r = await fetch("/api/ssc/relays", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: on })
+    });
+    const st = await r.json();
+    if (!st.ok) throw new Error(st.error || "failed");
+    $("ok").textContent = on ? "all coils energized" : "all coils at rest";
+    render(st);
+  } catch (e) {
+    $("err").textContent = e.message;
+    await tick(true);
+  } finally {
+    freeze(false);
+    render(last);
+  }
+}
+
+tick(true);
+setInterval(() => { if (!busy) tick(false); }, 2500);
+</script>
+</body>
+</html>

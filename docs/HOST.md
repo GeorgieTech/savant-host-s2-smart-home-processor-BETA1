@@ -26,6 +26,7 @@ Do **not** use **192.168.1.40**, **192.168.1.178**, or **192.168.1.180**.
 - Ethernet `eth0` MAC `00:1A:AE:10:E4:09`
 - Wi-Fi `wlan0` TI wl18xx (unused in BETA1)
 - Audio: Pulse sink `alsa_output.platform-sound-spdif.stereo-fallback` (TOSLINK / `imx-spdif`, 24-bit 96 kHz)
+- Paired expander: **SSC-0014** at 192.168.1.136 — see [SSC.md](SSC.md)
 
 This is **not** the SHC-2000 / SHC-S2 Quad (2 GB, 4 cores, `/data` on p3). Do not `dd` images between them.
 

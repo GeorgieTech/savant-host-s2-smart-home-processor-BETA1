@@ -17,7 +17,8 @@ Savant images on the eMMC are not deleted.
 From the repo root:
 
 ```sh
-scp -O host-webui/index.html host-webui/server.py host-webui/player.py \
+scp -O host-webui/index.html host-webui/controls.html host-webui/crypt.css \
+  host-webui/server.py host-webui/player.py host-webui/ssc.py \
   host-webui/pin-hostname.sh \
   host-webui/crypt-web.service host-webui/crypt-pulse.service \
   host-webui/crypt-hostname.service \
@@ -29,7 +30,8 @@ Then on the host, as root via `sudo env bash`:
 ```sh
 mkdir -p /data/www /data/music
 chown RPM:RPM /data/www /data/music
-cp /tmp/index.html /tmp/server.py /tmp/player.py /tmp/pin-hostname.sh /data/www/
+cp /tmp/index.html /tmp/controls.html /tmp/crypt.css \
+  /tmp/server.py /tmp/player.py /tmp/ssc.py /tmp/pin-hostname.sh /data/www/
 chmod +x /data/www/pin-hostname.sh /data/www/server.py
 cp /tmp/crypt-web.service /tmp/crypt-pulse.service /tmp/crypt-hostname.service /etc/systemd/system/
 systemctl mask savant-startup-manager.service nginx.service
@@ -47,4 +49,5 @@ Open http://192.168.1.179/
 
 - No `apt`. Yocto image.
 - Python 3.8 stdlib only.
-- DualLite / 1 GB — keep BETA1 to library + TOSLINK. No extra daemons.
+- DualLite / 1 GB — keep BETA1 to library + TOSLINK + one SSC telnet client. No extra daemons.
+- SSC-0014 is reached from the host at `192.168.1.136:23`. See [SSC.md](SSC.md).

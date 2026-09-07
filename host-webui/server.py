@@ -14,13 +14,23 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from player import HostPlayer, MUSIC_DIR
+from ssc import RELAY_COUNT, SscClient
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-INDEX = os.path.join(HERE, "index.html")
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
 MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD", str(400 * 1024 * 1024)))
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._+\- ()\[\]]+")
+SSC_HOST = os.environ.get("SSC_HOST", "192.168.1.136")
+SSC_PORT = int(os.environ.get("SSC_PORT", "23"))
+
+PAGES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/controls": ("controls.html", "text/html; charset=utf-8"),
+    "/controls.html": ("controls.html", "text/html; charset=utf-8"),
+    "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
+}
 
 
 def _safe_filename(name):
@@ -72,6 +82,44 @@ def _json_body(handler):
         return json.loads(raw.decode("utf-8"))
     except Exception:
         return {}
+
+
+def _as_bool(val):
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    s = str(val).strip().lower()
+    if s in ("1", "true", "on", "energize", "yes"):
+        return True
+    if s in ("0", "false", "off", "release", "no"):
+        return False
+    raise ValueError("need true or false")
+
+
+def _relay_port(body):
+    if body.get("relay") not in (None, ""):
+        n = int(body["relay"])
+        if 1 <= n <= RELAY_COUNT:
+            return n - 1
+        raise ValueError("relay must be 1-%d" % RELAY_COUNT)
+    if body.get("port") not in (None, ""):
+        n = int(body["port"])
+        if 0 <= n < RELAY_COUNT:
+            return n
+        raise ValueError("port must be 0-%d" % (RELAY_COUNT - 1))
+    raise ValueError("need relay 1-7 or port 0-6")
+
+
+def _on_flag(body):
+    if "on" in body:
+        return _as_bool(body.get("on"))
+    action = str(body.get("action") or "").strip().lower()
+    if action in ("on", "energize"):
+        return True
+    if action in ("off", "release"):
+        return False
+    raise ValueError("need on true/false or action on/off")
 
 
 class CryptApp(object):
@@ -168,6 +216,7 @@ class CryptApp(object):
 
 
 APP = CryptApp()
+SSC = SscClient(SSC_HOST, SSC_PORT)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -191,19 +240,29 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        raw_path = self.path.split("?", 1)[0]
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
         try:
-            if path in ("/", "/index.html"):
-                with open(INDEX, "rb") as fh:
+            if raw_path in PAGES:
+                name, ctype = PAGES[raw_path]
+                path = os.path.realpath(os.path.join(HERE, name))
+                if not path.startswith(os.path.realpath(HERE) + os.sep):
+                    self._send(404, {"error": "not found"})
+                    return
+                with open(path, "rb") as fh:
                     data = fh.read()
-                self._send(200, data, "text/html; charset=utf-8")
+                self._send(200, data, ctype)
                 return
-            if path == "/api/status":
+            if raw_path == "/api/status":
                 self._send(200, APP.status())
                 return
-            if path == "/api/library":
+            if raw_path == "/api/library":
                 APP.refresh()
                 self._send(200, {"tracks": _library(), "disk": _disk()})
+                return
+            if raw_path == "/api/ssc":
+                force = "fresh=1" in qs or "force=1" in qs
+                self._send(200, SSC.snapshot(force=force))
                 return
             self._send(404, {"error": "not found"})
         except Exception:
@@ -253,6 +312,23 @@ class Handler(BaseHTTPRequestHandler):
                 name = (body.get("name") or "").strip()
                 ok = APP.delete_name(name)
                 self._send(200 if ok else 400, {"ok": ok})
+                return
+            if path == "/api/ssc/relay":
+                try:
+                    port = _relay_port(body)
+                    on = _on_flag(body)
+                    snap = SSC.set_relay(port, on)
+                    self._send(200 if snap.get("ok") else 502, snap)
+                except Exception as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                return
+            if path == "/api/ssc/relays":
+                try:
+                    on = _on_flag(body)
+                    snap = SSC.set_all(on)
+                    self._send(200 if snap.get("ok") else 502, snap)
+                except Exception as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
                 return
             self._send(404, {"error": "not found"})
         except Exception:
