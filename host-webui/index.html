@@ -29,12 +29,22 @@
         <span class="badge" id="state">Idle</span>
       </div>
       <div class="viz-wrap" id="vizwrap">
-        <canvas id="viz" aria-label="Playback visualizer and waveform"></canvas>
+        <canvas id="viz" aria-label="Playback visualizer"></canvas>
         <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
       </div>
       <div class="now" id="now">Nothing playing</div>
       <div class="meta" id="meta">0:00 / 0:00</div>
-      <div class="bar" id="seek"><span id="fill"></span></div>
+      <div class="wave-scroll-wrap">
+        <canvas id="wscroll" aria-label="3-band waveform"></canvas>
+        <div class="wave-legend">
+          <span class="lo">Lows</span>
+          <span class="mid">Mids</span>
+          <span class="hi">Highs</span>
+        </div>
+      </div>
+      <div class="wave-over-wrap" id="seek">
+        <canvas id="wover" aria-label="Track overview"></canvas>
+      </div>
       <div class="transport">
         <button class="icon" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
         <button class="playbig primary" id="playbtn" onclick="toggle()">Play</button>
@@ -218,6 +228,39 @@ $("seek").addEventListener("click", (e) => {
   const t = ((e.clientX - r.left) / r.width) * p.duration;
   api("/api/seek", { seconds: t }).then(tick);
 });
+let playClock = { at: 0, pos: 0, playing: false, duration: 0, name: "" };
+let rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0 };
+function nowPos() {
+  if (!playClock.playing) return playClock.pos || 0;
+  const p = playClock.pos + (performance.now() - playClock.at) / 1000;
+  return Math.max(0, Math.min(playClock.duration || p, p));
+}
+function loadWave(name) {
+  if (!name) {
+    rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0 };
+    return;
+  }
+  if (rw.name === name && rw.n) return;
+  if (rw.name === name && rw.analyzing) return;
+  rw.name = name;
+  rw.n = 0;
+  rw.l = []; rw.m = []; rw.h = [];
+  rw.analyzing = true;
+  fetch("/api/wave?name=" + encodeURIComponent(name)).then((r) => r.json()).then((data) => {
+    if (rw.name !== name) return;
+    if (data && data.ok && data.l && data.l.length) {
+      rw.l = data.l; rw.m = data.m; rw.h = data.h;
+      rw.n = data.n || data.l.length;
+      rw.analyzing = false;
+    } else if (data && data.analyzing) {
+      rw.analyzing = true;
+      if (rw.timer) clearTimeout(rw.timer);
+      rw.timer = setTimeout(() => { rw.name = ""; loadWave(name); }, 1200);
+    } else {
+      rw.analyzing = false;
+    }
+  }).catch(() => { rw.analyzing = false; });
+}
 $("viz").addEventListener("click", () => { unlockAudio(); toggle(); });
 document.addEventListener("pointerdown", unlockAudio);
 tap.audio.addEventListener("playing", () => { tap.ok = true; });
@@ -294,7 +337,6 @@ function drawViz(ts) {
     energy += viz.bars[i];
   }
   energy = Math.max(0.06, Math.min(1, energy / bars * (live ? 2.2 : 1)));
-  const split = Math.floor(h * 0.58);
   const gap = Math.max(1, w * 0.006);
   const bw = (w - gap * (bars + 1)) / bars;
 
@@ -307,21 +349,20 @@ function drawViz(ts) {
   ctx.fillRect(0, 0, w, h);
 
   const cx = w / 2;
-  const cy = split * 0.62;
-  const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, split * 0.9);
+  const cy = h * 0.58;
+  const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, h * 0.7);
   rg.addColorStop(0, "rgba(224,122,58," + (0.18 + energy * 0.35) + ")");
-  rg.addColorStop(0.4, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
+  rg.addColorStop(0.35, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
   rg.addColorStop(1, "rgba(7,6,10,0)");
   ctx.fillStyle = rg;
-  ctx.fillRect(0, 0, w, split);
+  ctx.fillRect(0, 0, w, h);
 
-  const barH = split - h * 0.06;
   for (let i = 0; i < bars; i++) {
     const amp = Math.max(0.04, viz.bars[i]);
-    const bh = Math.max(h * 0.03, amp * barH);
+    const bh = Math.max(h * 0.04, amp * h * 0.9);
     const x = gap + i * (bw + gap);
-    const y = split - bh - 4;
-    const bar = ctx.createLinearGradient(0, y, 0, split);
+    const y = h - bh - h * 0.08;
+    const bar = ctx.createLinearGradient(0, y, 0, h);
     bar.addColorStop(0, "#f3c07a");
     bar.addColorStop(0.35, "#e07a3a");
     bar.addColorStop(1, "#5c1010");
@@ -330,59 +371,101 @@ function drawViz(ts) {
     ctx.fillRect(x, y, Math.max(1, bw), bh);
   }
   ctx.globalAlpha = 1;
-
-  ctx.fillStyle = "rgba(196,92,38,0.35)";
-  ctx.fillRect(0, split, w, Math.max(1, h * 0.004));
-  drawWave(ctx, w, h, split, t, live);
+  drawRekord();
 }
 
-function waveSamples() {
-  if (!tap.waveN || !tap.wave || !tap.ok) return null;
-  tap.waveN.getFloatTimeDomainData(tap.wave);
-  return tap.wave;
+function sizeCanvas(id, cssH) {
+  const c = $(id);
+  if (!c) return null;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = c.clientWidth || 320;
+  const h = cssH || c.clientHeight || 80;
+  const tw = Math.max(1, Math.floor(w * dpr));
+  const th = Math.max(1, Math.floor(h * dpr));
+  if (c.width !== tw) c.width = tw;
+  if (c.height !== th) c.height = th;
+  return { c: c, ctx: c.getContext("2d"), w: tw, h: th, dpr: dpr };
 }
-
-function drawWave(ctx, w, h, split, clock, live) {
-  const top = split + h * 0.04;
-  const bot = h - h * 0.04;
-  const mid = (top + bot) / 2;
-  const amp = (bot - top) / 2 * 0.92;
-  const data = (live && viz.mode === "play") ? waveSamples() : null;
-  ctx.beginPath();
-  ctx.moveTo(0, mid);
-  if (data && data.length) {
-    const n = data.length;
-    const step = Math.max(1, Math.floor(n / w));
+function stackCol(ctx, x, bw, mid, maxH, lo, md, hi) {
+  const tot = (lo + md + hi) / 255;
+  if (tot <= 0.002) return;
+  const mag = Math.min(1, tot) * maxH;
+  const s = lo + md + hi;
+  const hLo = mag * (lo / s);
+  const hMid = mag * (md / s);
+  const hHi = mag * (hi / s);
+  let y = mid;
+  ctx.fillStyle = "#2f6bff";
+  ctx.fillRect(x, y - hLo, bw, hLo);
+  ctx.fillRect(x, y, bw, hLo);
+  y = mid - hLo;
+  ctx.fillStyle = "#e08a3a";
+  ctx.fillRect(x, y - hMid, bw, hMid);
+  ctx.fillRect(x, mid + hLo, bw, hMid);
+  y = mid - hLo - hMid;
+  ctx.fillStyle = "#f3eee6";
+  ctx.fillRect(x, y - hHi, bw, hHi);
+  ctx.fillRect(x, mid + hLo + hMid, bw, hHi);
+}
+function drawRekord() {
+  const scroll = sizeCanvas("wscroll");
+  const over = sizeCanvas("wover");
+  if (!scroll || !over) return;
+  const pos = nowPos();
+  const dur = playClock.duration || 0;
+  paintScroll(scroll, pos, dur);
+  paintOver(over, pos, dur);
+}
+function paintScroll(s, pos, dur) {
+  const ctx = s.ctx, w = s.w, h = s.h;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#09070a";
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(196,92,38,0.18)";
+  ctx.fillRect(0, h / 2, w, Math.max(1, s.dpr));
+  if (!rw.n) {
+    ctx.fillStyle = "rgba(154,141,124,0.9)";
+    ctx.font = (11 * s.dpr) + "px Outfit, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(rw.analyzing ? "Analyzing waveform…" : "Play a track to build its 3-band waveform", w / 2, h / 2 + 4 * s.dpr);
+    return;
+  }
+  const n = rw.n;
+  const windowSec = Math.max(8, Math.min(18, dur * 0.22 || 12));
+  const cols = Math.max(8, (windowSec / Math.max(0.01, dur || windowSec)) * n);
+  const midCol = (dur > 0) ? (pos / dur) * n : 0;
+  const left = midCol - cols * 0.34;
+  const mid = h / 2;
+  const maxH = h * 0.46;
+  const bw = Math.max(1, w / cols);
+  for (let x = 0; x < w; x++) {
+    const i = Math.floor(left + (x / w) * cols);
+    if (i < 0 || i >= n) continue;
+    stackCol(ctx, x, Math.ceil(bw), mid, maxH, rw.l[i] || 0, rw.m[i] || 0, rw.h[i] || 0);
+  }
+  const px = w * 0.34;
+  ctx.fillStyle = "rgba(243,230,200,0.95)";
+  ctx.fillRect(px, 0, Math.max(2, s.dpr), h);
+}
+function paintOver(s, pos, dur) {
+  const ctx = s.ctx, w = s.w, h = s.h;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0c090c";
+  ctx.fillRect(0, 0, w, h);
+  const mid = h / 2;
+  const maxH = h * 0.46;
+  if (rw.n) {
+    const n = rw.n;
     for (let x = 0; x < w; x++) {
-      const i = Math.min(n - 1, x * step);
-      const y = mid + data[i] * amp;
-      ctx.lineTo(x, y);
-    }
-  } else if (viz.mode === "pause" && tap.wave && tap.wave.length) {
-    const n = tap.wave.length;
-    const step = Math.max(1, Math.floor(n / w));
-    for (let x = 0; x < w; x++) {
-      const i = Math.min(n - 1, x * step);
-      const y = mid + tap.wave[i] * amp * 0.7;
-      ctx.lineTo(x, y);
-    }
-  } else {
-    for (let x = 0; x < w; x++) {
-      const y = mid + Math.sin(x * 0.04 + clock * 1.4) * amp * 0.08;
-      ctx.lineTo(x, y);
+      const i = Math.min(n - 1, Math.floor((x / w) * n));
+      stackCol(ctx, x, 1, mid, maxH, rw.l[i] || 0, rw.m[i] || 0, rw.h[i] || 0);
     }
   }
-  ctx.lineTo(w, mid);
-  ctx.closePath();
-  const fill = ctx.createLinearGradient(0, top, 0, bot);
-  fill.addColorStop(0, "rgba(224,122,58,0.22)");
-  fill.addColorStop(0.5, "rgba(243,192,122,0.16)");
-  fill.addColorStop(1, "rgba(155,28,28,0.18)");
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(243,230,200,0.85)";
-  ctx.lineWidth = Math.max(1.2, w / 420);
-  ctx.stroke();
+  if (dur > 0) {
+    const px = (pos / dur) * w;
+    ctx.fillStyle = "rgba(243,230,200,0.95)";
+    ctx.fillRect(px, 0, Math.max(2, s.dpr), h);
+  }
 }
 
 function startViz() {
@@ -441,7 +524,14 @@ async function tick() {
     $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
     $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
     $("meta").textContent = fmt(p.position) + " / " + fmt(p.duration);
-    $("fill").style.width = (p.duration ? (100 * p.position / p.duration) : 0) + "%";
+    playClock = {
+      at: performance.now(),
+      pos: p.position || 0,
+      playing: playing,
+      duration: p.duration || 0,
+      name: p.name || ""
+    };
+    loadWave(p.name || "");
     $("playbtn").textContent = playing ? "Pause" : "Play";
     $("err").textContent = p.error || "";
     if (!volUser) $("vol").value = st.volume == null ? 100 : st.volume;
@@ -457,7 +547,7 @@ async function tick() {
   }
 }
 
-window.addEventListener("resize", sizeViz);
+window.addEventListener("resize", () => { sizeViz(); drawRekord(); });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopViz();

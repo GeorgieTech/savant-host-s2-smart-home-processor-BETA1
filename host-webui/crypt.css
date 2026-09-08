@@ -158,8 +158,56 @@ body.is-playing {
 canvas#viz {
   display: block;
   width: 100%;
-  height: 248px;
+  height: 168px;
   cursor: pointer;
+}
+.wave-scroll-wrap {
+  position: relative;
+  margin: 0 0 10px;
+}
+canvas#wscroll {
+  display: block;
+  width: 100%;
+  height: 96px;
+  border-radius: 12px;
+  background: #09070a;
+  border: 1px solid rgba(196,92,38,0.22);
+}
+.wave-legend {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.wave-legend .lo::before,
+.wave-legend .mid::before,
+.wave-legend .hi::before {
+  content: "";
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.wave-legend .lo::before { background: #2f6bff; }
+.wave-legend .mid::before { background: #e08a3a; }
+.wave-legend .hi::before { background: #f3eee6; }
+.wave-over-wrap {
+  height: 52px;
+  border-radius: 99px;
+  overflow: hidden;
+  border: 1px solid #3a2420;
+  background: #1a1212;
+  cursor: pointer;
+}
+canvas#wover {
+  display: block;
+  width: 100%;
+  height: 52px;
 }
 audio#tap {
   position: absolute;
@@ -596,7 +644,8 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
 @media (min-width: 800px) {
   .page { max-width: 860px; }
   .controls { grid-template-columns: repeat(4, 1fr); }
-  canvas#viz { height: 300px; }
+  canvas#viz { height: 188px; }
+  canvas#wscroll { height: 110px; }
 }
 
 @media (max-width: 420px) {

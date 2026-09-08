@@ -16,6 +16,7 @@ from urllib.parse import parse_qs
 
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
 from library import CATALOG, PLAYLISTS
+from wave import WAVES
 from ssc import SscHub
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -438,13 +439,27 @@ class CryptApp(object):
             if name not in self.order:
                 return False
             self.index = self.order.index(name)
-        return self.player.play(name, start=start)
+            nxt = self.order[self.index + 1] if self.index + 1 < len(self.order) else ""
+        ok = self.player.play(name, start=start)
+        if ok:
+            WAVES.ensure(name, front=True)
+            if nxt:
+                WAVES.ensure(nxt)
+        return ok
 
     def play_playlist(self, pid):
         pl = PLAYLISTS.get(pid)
         if not pl or not pl.get("tracks"):
             return False
         return self.play_name(pl["tracks"][0], order=pl["tracks"])
+
+    def _start_name(self, name, start=0.0, nxt=""):
+        ok = self.player.play(name, start=start)
+        if ok:
+            WAVES.ensure(name, front=True)
+            if nxt:
+                WAVES.ensure(nxt)
+        return ok
 
     def play_index(self, idx):
         self.refresh()
@@ -454,7 +469,8 @@ class CryptApp(object):
             idx = idx % len(self.order)
             self.index = idx
             name = self.order[idx]
-        return self.player.play(name, start=0.0)
+            nxt = self.order[self.index + 1] if self.index + 1 < len(self.order) else ""
+        return self._start_name(name, 0.0, nxt)
 
     def next_track(self):
         self.refresh()
@@ -463,7 +479,8 @@ class CryptApp(object):
                 return False
             self.index = 0 if self.index < 0 else (self.index + 1) % len(self.order)
             name = self.order[self.index]
-        return self.player.play(name)
+            nxt = self.order[self.index + 1] if self.index + 1 < len(self.order) else ""
+        return self._start_name(name, 0.0, nxt)
 
     def prev_track(self):
         self.refresh()
@@ -472,7 +489,8 @@ class CryptApp(object):
                 return False
             self.index = 0 if self.index < 0 else (self.index - 1) % len(self.order)
             name = self.order[self.index]
-        return self.player.play(name)
+            nxt = self.order[self.index + 1] if self.index + 1 < len(self.order) else ""
+        return self._start_name(name, 0.0, nxt)
 
     def _on_end(self):
         self.next_track()
@@ -557,6 +575,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/eq":
                 self._send(200, APP.eq_state())
+                return
+            if raw_path == "/api/wave":
+                name = _qparam(qs, "name")
+                data = WAVES.get(name)
+                code = 200
+                if data.get("analyzing"):
+                    code = 202
+                elif not data.get("ok"):
+                    code = 404 if data.get("error") == "not found" else 200
+                self._send(code, data)
                 return
             if raw_path == "/api/media":
                 full = _media_path(_qparam(qs, "name"))
