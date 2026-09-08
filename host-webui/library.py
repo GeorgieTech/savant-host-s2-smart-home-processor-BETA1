@@ -18,6 +18,25 @@ PLAYLIST_FILE = os.path.join(STATE_DIR, "playlists.json")
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 UNKNOWN_ARTIST = "Unknown artist"
 UNKNOWN_ALBUM = "Unknown album"
+GENRES = (
+    "Trance",
+    "House",
+    "Techno",
+    "Drum & Bass",
+    "Dubstep",
+    "Electronic",
+    "Ambient",
+    "Pop",
+    "Rock",
+    "Hip-Hop",
+    "R&B",
+    "Jazz",
+    "Classical",
+    "Metal",
+    "Country",
+    "Soundtrack",
+    "Other",
+)
 DISC_RE = re.compile(r"^(disc|disk|cd)\s*\d+$", re.I)
 TRACK_PREFIX_RE = re.compile(r"^(\d{1,3})\s*[-.)]\s*")
 PAIR_RE = re.compile(r"\s+-\s+")
@@ -127,24 +146,27 @@ def probe_file(full):
     return info
 
 
-def identity_from_path(rel, probed=None):
+def identity_from_path(rel, probed=None, override=None):
     probed = probed or {}
+    override = override if isinstance(override, dict) else {}
     path_artist, path_album, path_title = _path_meta(rel)
     fn_artist, fn_title = _parse_filename_pair(path_title)
-    artist = (probed.get("artist") or path_artist or fn_artist or "").strip()
-    album = (probed.get("album") or path_album or "").strip()
-    title = (probed.get("title") or "").strip()
+    artist = (override.get("artist") or probed.get("artist") or path_artist or fn_artist or "").strip()
+    album = (override.get("album") or probed.get("album") or path_album or "").strip()
+    title = (override.get("title") or probed.get("title") or "").strip()
     if not title:
         title = fn_title if fn_artist else path_title
     if not title:
         title = _pretty_title(rel)
     track = int(probed.get("track") or 0) or _track_no("", rel)
+    genre = (override.get("genre") if "genre" in override else probed.get("genre") or "").strip()
     return {
         "title": title,
         "artist": artist or UNKNOWN_ARTIST,
         "album": album or UNKNOWN_ALBUM,
         "track": track,
-        "genre": (probed.get("genre") or "").strip(),
+        "genre": genre,
+        "edited": bool(override),
     }
 
 
@@ -152,6 +174,7 @@ class Library(object):
     def __init__(self):
         self.lock = threading.Lock()
         self.cache = {}
+        self.edits = {}
         self.scanning = False
         self._dirty = 0
         self._load()
@@ -165,15 +188,19 @@ class Library(object):
             probes = data.get("probes") if isinstance(data, dict) else None
             if isinstance(probes, dict):
                 self.cache = probes
+            edits = data.get("edits") if isinstance(data, dict) else None
+            if isinstance(edits, dict):
+                self.edits = edits
         except (OSError, ValueError, TypeError):
             self.cache = {}
+            self.edits = {}
 
     def _save(self):
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
             tmp = META_FILE + ".tmp"
             with open(tmp, "w") as fh:
-                json.dump({"probes": self.cache}, fh, separators=(",", ":"))
+                json.dump({"probes": self.cache, "edits": self.edits}, fh, separators=(",", ":"))
             os.replace(tmp, META_FILE)
             self._dirty = 0
         except OSError:
@@ -207,7 +234,8 @@ class Library(object):
             for item in files:
                 key = _probe_key(item["name"], item["size"], item["mtime"])
                 probed = cache.get(key)
-                ident = identity_from_path(item["name"], probed)
+                override = self.edits.get(item["name"]) or {}
+                ident = identity_from_path(item["name"], probed, override)
                 rec = {
                     "name": item["name"],
                     "size": item["size"],
@@ -217,6 +245,7 @@ class Library(object):
                     "track": ident["track"],
                     "genre": ident["genre"],
                     "tagged": bool(probed),
+                    "edited": ident.get("edited") or False,
                 }
                 out.append(rec)
                 if probed is None:
@@ -269,8 +298,38 @@ class Library(object):
             drop = [k for k in self.cache if k.startswith(prefix)]
             for k in drop:
                 self.cache.pop(k, None)
+            if name in self.edits:
+                self.edits.pop(name, None)
+                drop.append(name)
             if drop:
                 self._save()
+
+    def apply_edits(self, mapping):
+        if not isinstance(mapping, dict):
+            raise ValueError("edits must be a map of track names")
+        changed = 0
+        with self.lock:
+            for raw_name, fields in mapping.items():
+                name = str(raw_name or "").replace("\\", "/").lstrip("/")
+                if not name or not isinstance(fields, dict):
+                    continue
+                cur = dict(self.edits.get(name) or {})
+                for key in ("artist", "album", "genre", "title"):
+                    if key not in fields:
+                        continue
+                    val = str(fields.get(key) or "").strip()[:80]
+                    if val:
+                        cur[key] = val
+                    else:
+                        cur.pop(key, None)
+                if cur:
+                    self.edits[name] = cur
+                else:
+                    self.edits.pop(name, None)
+                changed += 1
+            if changed:
+                self._save()
+        return changed
 
 
 class Playlists(object):

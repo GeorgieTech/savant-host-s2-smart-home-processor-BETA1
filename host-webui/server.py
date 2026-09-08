@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
-from library import CATALOG, PLAYLISTS
+from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
 from ssc import SscHub
 
@@ -221,6 +221,18 @@ def _safe_filename(name):
 
 def _library():
     return CATALOG.tracks()
+
+
+def _library_payload():
+    tracks = _library()
+    return {
+        "ok": True,
+        "tracks": tracks,
+        "disk": _disk(),
+        "scanning": bool(CATALOG.scanning),
+        "playlists": PLAYLISTS.list([t["name"] for t in tracks]),
+        "genres": list(GENRES),
+    }
 
 
 def _disk():
@@ -514,6 +526,39 @@ class CryptApp(object):
         self.refresh()
         return True
 
+    def delete_names(self, names):
+        if not isinstance(names, list):
+            raise ValueError("delete must be a list of names")
+        cleaned = []
+        seen = set()
+        for item in names:
+            name = str(item or "").replace("\\", "/").lstrip("/")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append(name)
+            if len(cleaned) >= 200:
+                break
+        deleted = 0
+        for name in cleaned:
+            if self.delete_name(name):
+                deleted += 1
+        return deleted
+
+    def manage_library(self, body):
+        deleted = 0
+        edited = 0
+        if body.get("delete"):
+            deleted = self.delete_names(body.get("delete"))
+        edits = body.get("edits")
+        if edits:
+            edited = CATALOG.apply_edits(edits)
+            self.refresh()
+        payload = _library_payload()
+        payload["deleted"] = deleted
+        payload["edited"] = edited
+        return payload
+
 
 APP = CryptApp()
 HUB = SscHub()
@@ -558,16 +603,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/library":
                 APP.refresh()
-                tracks = _library()
-                self._send(
-                    200,
-                    {
-                        "tracks": tracks,
-                        "disk": _disk(),
-                        "scanning": bool(CATALOG.scanning),
-                        "playlists": PLAYLISTS.list([t["name"] for t in tracks]),
-                    },
-                )
+                self._send(200, _library_payload())
                 return
             if raw_path == "/api/playlists":
                 tracks = _library()
@@ -710,6 +746,14 @@ class Handler(BaseHTTPRequestHandler):
                 name = (body.get("name") or "").strip()
                 ok = APP.delete_name(name)
                 self._send(200 if ok else 400, {"ok": ok})
+                return
+            if path == "/api/library/manage":
+                try:
+                    payload = APP.manage_library(body)
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                    return
+                self._send(200, payload)
                 return
             if path in ("/api/ssc/relay", "/api/ssc/relays") or path.startswith("/api/ssc/"):
                 try:

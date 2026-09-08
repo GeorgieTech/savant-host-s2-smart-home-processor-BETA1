@@ -35,8 +35,29 @@
     <section class="card">
       <div class="section-head">
         <h2>Library</h2>
-        <span class="meta tight" id="disk"></span>
+        <div class="lib-head-actions">
+          <span class="meta tight" id="disk"></span>
+          <button type="button" class="ghost" id="btn-manage">Manage</button>
+        </div>
       </div>
+      <div class="manage-bar hidden" id="manage-bar">
+        <p class="hint" id="manage-hint">Select tracks to delete, or edit artist, album, and genre.</p>
+        <div class="row">
+          <button type="button" id="sel-all">Select all</button>
+          <button type="button" class="ghost" id="sel-none">Clear</button>
+          <button type="button" class="release" id="del-sel">Delete selected</button>
+        </div>
+        <div class="edit-grid">
+          <input id="bulk-artist" placeholder="Artist" autocomplete="off">
+          <input id="bulk-album" placeholder="Album" autocomplete="off">
+          <input id="bulk-genre" placeholder="Genre" list="genre-list" autocomplete="off">
+        </div>
+        <div class="row">
+          <button type="button" class="primary" id="bulk-apply">Apply to selected</button>
+          <button type="button" class="ghost" id="manage-done">Done</button>
+        </div>
+      </div>
+      <datalist id="genre-list"></datalist>
       <div class="lib-toggle" id="toggle" role="tablist">
         <button type="button" data-view="artists" class="on">Artists</button>
         <button type="button" data-view="albums">Albums</button>
@@ -76,6 +97,10 @@ let album = "";
 let playlistId = "";
 let addTarget = "";
 let stamp = "";
+let manage = false;
+let selected = {};
+let draft = {};
+let genres = [];
 
 function pretty(n) {
   if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
@@ -234,6 +259,95 @@ function paintCrumbs() {
   }
 }
 
+function selectedNames() {
+  return Object.keys(selected).filter((k) => selected[k]);
+}
+function fillGenres(list) {
+  if (!list || !list.length) return;
+  genres = list;
+  const el = $("genre-list");
+  el.innerHTML = "";
+  genres.forEach((g) => {
+    const o = document.createElement("option");
+    o.value = g;
+    el.appendChild(o);
+  });
+}
+function enterManage() {
+  manage = true;
+  if (view === "playlists" || (view === "artists" && !artist) || (view === "albums" && !album)) {
+    view = "tracks";
+    artist = artist || "";
+    album = album || "";
+  }
+  selected = {};
+  draft = {};
+  $("manage-bar").classList.remove("hidden");
+  $("btn-manage").textContent = "Done";
+  $("btn-manage").classList.add("on");
+  render();
+}
+async function exitManage(save) {
+  if (save && Object.keys(draft).length) {
+    const st = await api("/api/library/manage", { edits: draft });
+    if (!st.ok) {
+      $("err").textContent = st.error || "could not save tags";
+      return;
+    }
+    last.tracks = st.tracks || last.tracks;
+    last.playlists = st.playlists || last.playlists;
+  }
+  manage = false;
+  selected = {};
+  draft = {};
+  $("manage-bar").classList.add("hidden");
+  $("btn-manage").textContent = "Manage";
+  $("btn-manage").classList.remove("on");
+  tick(true);
+}
+function setDraft(name, field, value) {
+  if (!draft[name]) draft[name] = {};
+  draft[name][field] = value;
+}
+function rowManage(t) {
+  const li = document.createElement("li");
+  li.className = "manage-row" + (selected[t.name] ? " picked" : "");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = !!selected[t.name];
+  box.setAttribute("aria-label", "Select " + titleOf(t));
+  box.onclick = (e) => e.stopPropagation();
+  box.onchange = () => {
+    if (box.checked) selected[t.name] = true;
+    else delete selected[t.name];
+    li.classList.toggle("picked", box.checked);
+    $("manage-hint").textContent = selectedNames().length + " selected";
+  };
+  const grow = document.createElement("div");
+  grow.className = "grow";
+  grow.innerHTML = "<div class='name'>" + esc(titleOf(t)) + "</div>";
+  const grid = document.createElement("div");
+  grid.className = "edit-grid";
+  const cur = Object.assign({ artist: t.artist || "", album: t.album || "", genre: t.genre || "" }, draft[t.name] || {});
+  ["artist", "album", "genre"].forEach((field) => {
+    const inp = document.createElement("input");
+    inp.value = cur[field] || "";
+    inp.placeholder = field[0].toUpperCase() + field.slice(1);
+    inp.autocomplete = "off";
+    if (field === "genre") inp.setAttribute("list", "genre-list");
+    inp.onclick = (e) => e.stopPropagation();
+    inp.oninput = () => setDraft(t.name, field, inp.value);
+    grid.appendChild(inp);
+  });
+  grow.appendChild(grid);
+  li.appendChild(box);
+  li.appendChild(grow);
+  li.onclick = () => {
+    box.checked = !box.checked;
+    box.onchange();
+  };
+  return li;
+}
 function rowTrack(t, opts) {
   const li = document.createElement("li");
   if (t.name === playingName()) li.className = "on";
@@ -271,6 +385,13 @@ function render() {
   actions.innerHTML = "";
   actions.hidden = true;
   const now = playingName();
+  if (manage) {
+    const list = viewTracks();
+    list.forEach((t) => ul.appendChild(rowManage(t)));
+    $("manage-hint").textContent = selectedNames().length + " selected · " + list.length + " in this view";
+    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No tracks in this view</span></li>";
+    return;
+  }
 
   if (view === "artists" && !artist) {
     const list = artists();
@@ -391,6 +512,48 @@ const drop = $("drop");
 ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
 drop.addEventListener("drop", e => upload(e.dataTransfer.files));
 $("file").addEventListener("change", e => upload(e.target.files));
+$("btn-manage").onclick = () => {
+  if (manage) exitManage(true);
+  else enterManage();
+};
+$("manage-done").onclick = () => exitManage(true);
+$("sel-all").onclick = () => {
+  viewTracks().forEach((t) => { selected[t.name] = true; });
+  render();
+};
+$("sel-none").onclick = () => { selected = {}; render(); };
+$("del-sel").onclick = async () => {
+  const names = selectedNames();
+  if (!names.length) return;
+  if (!confirm("Delete " + names.length + " selected track" + (names.length === 1 ? "" : "s") + " from this host?")) return;
+  const st = await api("/api/library/manage", { delete: names, edits: draft });
+  if (!st.ok) { $("err").textContent = st.error || "delete failed"; return; }
+  last.tracks = st.tracks || last.tracks;
+  last.playlists = st.playlists || last.playlists;
+  last.disk = st.disk || last.disk;
+  names.forEach((n) => { delete selected[n]; delete draft[n]; });
+  tick(true);
+};
+$("bulk-apply").onclick = async () => {
+  const names = selectedNames();
+  if (!names.length) { $("err").textContent = "Select tracks first"; return; }
+  const patch = {};
+  const artist = ($("bulk-artist").value || "").trim();
+  const album = ($("bulk-album").value || "").trim();
+  const genre = ($("bulk-genre").value || "").trim();
+  if (artist) patch.artist = artist;
+  if (album) patch.album = album;
+  if (genre) patch.genre = genre;
+  if (!Object.keys(patch).length) { $("err").textContent = "Enter artist, album, or genre"; return; }
+  const edits = {};
+  names.forEach((n) => { edits[n] = Object.assign({}, draft[n] || {}, patch); draft[n] = edits[n]; });
+  const st = await api("/api/library/manage", { edits: edits });
+  if (!st.ok) { $("err").textContent = st.error || "could not save tags"; return; }
+  last.tracks = st.tracks || last.tracks;
+  $("manage-hint").textContent = "Updated " + (st.edited || names.length) + " track" + (names.length === 1 ? "" : "s");
+  $("err").textContent = "";
+  render();
+};
 
 async function upload(files) {
   const list = Array.from(files || []);
@@ -415,6 +578,7 @@ async function tick(force) {
     const st = await (await fetch("/api/status")).json();
     const lib = await (await fetch("/api/library")).json();
     last = Object.assign({}, st, lib);
+    if (lib.genres) fillGenres(lib.genres);
     const p = st.player || {};
     $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.model || "SHR-S2") + " · TOSLINK");
     const d = lib.disk || st.disk || {};
@@ -424,6 +588,7 @@ async function tick(force) {
     $("err").textContent = "";
     const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
     const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",");
+    if (manage && !force) return;
     if (force || next !== stamp) {
       stamp = next;
       render();
