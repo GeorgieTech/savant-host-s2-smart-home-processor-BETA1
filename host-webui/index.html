@@ -668,14 +668,20 @@ function peakRange(arr, a, b) {
   return m;
 }
 function stackCol(ctx, x, bw, mid, maxH, lo, md, hi) {
-  if (hi < 20) hi = 0;
-  const tot = (lo + md + hi) / 255;
-  if (tot <= 0.015) return;
-  const mag = Math.min(1, tot) * maxH;
-  const s = lo + md + hi;
-  const hLo = mag * (lo / s);
-  const hMid = mag * (md / s);
-  const hHi = mag * (hi / s);
+  lo = Math.max(0, lo || 0);
+  md = Math.max(0, md || 0);
+  hi = Math.max(0, hi || 0);
+  let hLo = (lo / 255) * maxH * 0.46;
+  let hMid = (md / 255) * maxH * 0.34;
+  let hHi = (hi / 255) * maxH * 0.40;
+  if (hi > 18) hHi = Math.max(hHi, 2);
+  const body = hLo + hMid;
+  if (body + hHi > maxH && body > 0) {
+    const k = Math.max(0.2, (maxH - hHi) / body);
+    hLo *= k;
+    hMid *= k;
+  }
+  if (hLo + hMid + hHi < 0.45) return;
   const xi = Math.floor(x);
   const wi = Math.max(1, Math.ceil(bw));
   ctx.fillStyle = "#2f6bff";
@@ -684,8 +690,8 @@ function stackCol(ctx, x, bw, mid, maxH, lo, md, hi) {
   ctx.fillStyle = "#e08a3a";
   ctx.fillRect(xi, mid - hLo - hMid, wi, hMid);
   ctx.fillRect(xi, mid + hLo, wi, hMid);
-  if (hHi >= 1) {
-    ctx.fillStyle = "#f3eee6";
+  if (hHi >= 0.6) {
+    ctx.fillStyle = "#f6f1e4";
     ctx.fillRect(xi, mid - hLo - hMid - hHi, wi, hHi);
     ctx.fillRect(xi, mid + hLo + hMid, wi, hHi);
   }
@@ -724,7 +730,7 @@ function paintScroll(s, pos, dur) {
   const midCol = (dur > 0) ? (pos / dur) * n : 0;
   const left = midCol - cols * 0.34;
   const mid = h / 2;
-  const maxH = h * 0.46;
+  const maxH = h * 0.50;
   const srcPerPx = cols / w;
   if (srcPerPx >= 1) {
     for (let x = 0; x < w; x++) {
@@ -759,7 +765,7 @@ function paintOver(s, pos, dur) {
   ctx.fillStyle = "#0c090c";
   ctx.fillRect(0, 0, w, h);
   const mid = h / 2;
-  const maxH = h * 0.46;
+  const maxH = h * 0.50;
   if (rw.n) {
     const n = rw.n;
     const srcPerPx = n / w;

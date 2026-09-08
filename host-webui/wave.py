@@ -14,9 +14,9 @@ import time
 from player import MUSIC_DIR
 
 WAVE_DIR = os.environ.get("CRYPT_WAVES", "/data/crypt/waves")
-WAVE_VER = 2
-RATE = 40
-MAX_FRAMES = 12000
+WAVE_VER = 3
+RATE = 80
+MAX_FRAMES = 28800
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 
 def _lower_nice():
@@ -26,13 +26,15 @@ def _lower_nice():
         pass
 
 
+# Envelope each band at full rate, then downsample. aresample-to-RATE of the
+# raw 6–12 kHz band is a ~20 Hz lowpass, so highs (and most mids) vanished.
 _FILTER = (
-    "[0:a]aformat=channel_layouts=mono:sample_fmts=flt,asplit=3[l0][m0][h0];"
-    "[l0]lowpass=f=220,lowpass=f=220,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[l];"
-    "[m0]highpass=f=220,lowpass=f=3500,lowpass=f=3500,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[m];"
-    "[h0]highpass=f=6000,lowpass=f=12000,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[h];"
-    "[l][m][h]join=inputs=3:channel_layout=3.0[a]"
-) % (RATE, RATE, RATE)
+    "[0:a]aformat=channel_layouts=mono:sample_fmts=flt,aresample=22050,asplit=3[l0][m0][h0];"
+    "[l0]lowpass=f=250,lowpass=f=250,aeval=abs(val(0)):c=same,lowpass=f=18[l];"
+    "[m0]highpass=f=250,lowpass=f=4000,lowpass=f=4000,aeval=abs(val(0)):c=same,lowpass=f=18[m];"
+    "[h0]highpass=f=4000,highpass=f=4000,aeval=abs(val(0)):c=same,lowpass=f=18[h];"
+    "[l][m][h]join=inputs=3:channel_layout=3.0:map=0.0-FL|1.0-FR|2.0-FC,aresample=%d[a]"
+) % RATE
 
 
 def _full_path(rel):
@@ -184,7 +186,7 @@ def _analyze(full, on_progress=None):
                         last_pct = guess
                         report(guess, "Analyzing waveform")
                 continue
-            buf = os.read(fd, 12 * 512)
+            buf = os.read(fd, 12 * 4096)
             if not buf:
                 break
             raw.extend(buf)
@@ -222,6 +224,12 @@ def _analyze(full, on_progress=None):
         except Exception:
             pass
         return None
+    finally:
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
     if not raw:
         return None
     report(97, "Building bands")
@@ -249,16 +257,16 @@ def _analyze(full, on_progress=None):
         mids.append((sm / den) ** 0.5)
         highs.append((sh / den) ** 0.5)
         i += step
-    lows = _smooth(lows)
-    mids = _smooth(mids)
-    highs = _smooth(highs)
+    lows = _smooth(lows, 2)
+    mids = _smooth(mids, 2)
+    highs = _smooth(highs, 1)
     return {
         "v": WAVE_VER,
         "rate": RATE / float(step),
         "n": len(lows),
-        "l": _scale_band(lows, 0.96, 0.70, 1.00, 0.04),
-        "m": _scale_band(mids, 0.97, 0.75, 0.92, 0.06),
-        "h": _scale_band(highs, 0.995, 0.92, 0.34, 0.16),
+        "l": _scale_band(lows, 0.95, 0.68, 1.00, 0.03),
+        "m": _scale_band(mids, 0.94, 0.70, 1.00, 0.03),
+        "h": _scale_band(highs, 0.90, 0.55, 1.12, 0.02),
     }
 
 
