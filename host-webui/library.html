@@ -23,13 +23,23 @@
     <div class="hostline" id="hostline">Connecting…</div>
   </header>
   <main class="page">
+    <div class="job hidden" id="job" aria-live="polite">
+      <div class="job-head">
+        <div class="job-title" id="job-title">Working</div>
+        <div class="job-pct" id="job-pct">0%</div>
+      </div>
+      <div class="job-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="job-bar">
+        <div class="job-fill" id="job-fill"></div>
+      </div>
+      <div class="job-detail" id="job-detail"></div>
+      <div class="job-stay" id="job-stay">Do not refresh or leave this page until this finishes.</div>
+    </div>
     <section class="card">
       <h2>Upload</h2>
       <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this host and play out TOSLINK.</p>
       <div class="drop" id="drop">
         Drop files here, or
         <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
-        <div id="upstat"></div>
       </div>
     </section>
     <section class="card">
@@ -101,6 +111,9 @@ let manage = false;
 let selected = {};
 let draft = {};
 let genres = [];
+let jobBusy = false;
+let jobTimer = 0;
+const AUDIO_EXT = { ".mp3":1, ".flac":1, ".opus":1, ".ogg":1, ".wav":1, ".m4a":1, ".aac":1 };
 
 function pretty(n) {
   if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
@@ -177,8 +190,7 @@ async function playList(list, start) {
 async function delName(name, ev) {
   ev.stopPropagation();
   if (!confirm("Delete “" + name + "” from the library?")) return;
-  await api("/api/delete", { name });
-  tick(true);
+  await deleteNames([name]);
 }
 
 function openPicker(name, ev) {
@@ -508,7 +520,10 @@ function render() {
 }
 
 const drop = $("drop");
-["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault();
+  if (!jobBusy) drop.classList.add("hot");
+}));
 ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
 drop.addEventListener("drop", e => upload(e.dataTransfer.files));
 $("file").addEventListener("change", e => upload(e.target.files));
@@ -526,13 +541,7 @@ $("del-sel").onclick = async () => {
   const names = selectedNames();
   if (!names.length) return;
   if (!confirm("Delete " + names.length + " selected track" + (names.length === 1 ? "" : "s") + " from this host?")) return;
-  const st = await api("/api/library/manage", { delete: names, edits: draft });
-  if (!st.ok) { $("err").textContent = st.error || "delete failed"; return; }
-  last.tracks = st.tracks || last.tracks;
-  last.playlists = st.playlists || last.playlists;
-  last.disk = st.disk || last.disk;
-  names.forEach((n) => { delete selected[n]; delete draft[n]; });
-  tick(true);
+  await deleteNames(names);
 };
 $("bulk-apply").onclick = async () => {
   const names = selectedNames();
@@ -555,25 +564,156 @@ $("bulk-apply").onclick = async () => {
   render();
 };
 
-async function upload(files) {
-  const list = Array.from(files || []);
-  for (const f of list) {
-    $("upstat").textContent = "Uploading " + f.name + "…";
+function setJobBusy(on) {
+  jobBusy = on;
+  document.body.classList.toggle("job-busy", on);
+  drop.classList.toggle("locked", on);
+  $("file").disabled = on;
+  $("del-sel").disabled = on;
+  $("btn-manage").disabled = on;
+  $("manage-done").disabled = on;
+}
+function showJob() {
+  $("job").classList.remove("hidden", "done", "fail");
+}
+function hideJobLater() {
+  if (jobTimer) clearTimeout(jobTimer);
+  jobTimer = setTimeout(() => {
+    if (!jobBusy) $("job").classList.add("hidden");
+  }, 12000);
+}
+function paintJob(pct, title, detail, stay, state) {
+  const n = Math.max(0, Math.min(100, Math.round(pct)));
+  $("job-title").textContent = title;
+  $("job-pct").textContent = n + "%";
+  $("job-fill").style.width = n + "%";
+  $("job-bar").setAttribute("aria-valuenow", String(n));
+  $("job-detail").textContent = detail || "";
+  $("job-stay").textContent = stay;
+  $("job").classList.toggle("done", state === "done");
+  $("job").classList.toggle("fail", state === "fail");
+}
+function startJob(title, detail) {
+  if (jobTimer) clearTimeout(jobTimer);
+  showJob();
+  setJobBusy(true);
+  paintJob(0, title, detail, "Do not refresh or leave this page until this finishes.", "");
+}
+function finishJob(ok, title, detail) {
+  setJobBusy(false);
+  paintJob(100, title, detail, ok ? "Complete. You can leave this page." : "Finished with errors. You can leave this page.", ok ? "done" : "fail");
+  hideJobLater();
+}
+function putFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      onProgress(e.loaded, e.total, "sending");
+    };
+    xhr.upload.onload = () => onProgress(file.size || 1, file.size || 1, "saving");
+    xhr.onload = () => {
+      let j = {};
+      try { j = JSON.parse(xhr.responseText || "{}"); } catch (err) { j = {}; }
+      if (xhr.status >= 200 && xhr.status < 300 && j.ok) resolve(j);
+      else reject(new Error(j.error || ("HTTP " + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.onabort = () => reject(new Error("aborted"));
     const fd = new FormData();
-    fd.append("file", f, f.name);
-    try {
-      const r = await fetch("/api/upload", { method: "POST", body: fd });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "failed");
-      $("upstat").textContent = "Saved " + j.name;
-    } catch (err) {
-      $("upstat").textContent = "Rejected: " + err.message;
+    fd.append("file", file, file.name);
+    xhr.send(fd);
+  });
+}
+async function upload(files) {
+  if (jobBusy) return;
+  const list = Array.from(files || []).filter((f) => f && f.name);
+  if (!list.length) return;
+  const totalBytes = list.reduce((s, f) => s + (f.size || 0), 0);
+  startJob("Uploading", list[0].name);
+  let saved = 0;
+  let failed = 0;
+  let doneBytes = 0;
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+    const label = (i + 1) + " of " + list.length + " · " + f.name;
+    if (ext && !AUDIO_EXT[ext]) {
+      failed += 1;
+      doneBytes += f.size || 0;
+      paintJob(totalBytes ? (doneBytes / totalBytes) * 100 : ((i + 1) / list.length) * 100, "Uploading", label, "Do not refresh or leave this page until this finishes.", "");
+      continue;
     }
+    try {
+      await putFile(f, (loaded, total, phase) => {
+        const cur = Math.min(f.size || total || loaded, loaded);
+        const frac = totalBytes ? (doneBytes + cur) / totalBytes : (i + (total ? loaded / total : 0)) / list.length;
+        const stay = phase === "saving"
+          ? "Saving on the host — stay on this page."
+          : "Do not refresh or leave this page until this finishes.";
+        paintJob(frac * 100, "Uploading", label, stay, "");
+      });
+      saved += 1;
+    } catch (err) {
+      failed += 1;
+      $("err").textContent = f.name + ": " + err.message;
+    }
+    doneBytes += f.size || 0;
+    paintJob(totalBytes ? (doneBytes / totalBytes) * 100 : ((i + 1) / list.length) * 100, "Uploading", label, "Do not refresh or leave this page until this finishes.", "");
   }
+  $("file").value = "";
+  const summary = saved + " uploaded" + (failed ? ", " + failed + " rejected" : "");
+  if (saved && !failed) finishJob(true, "Complete", summary);
+  else if (saved) finishJob(true, "Complete", summary);
+  else finishJob(false, "Failed", failed ? summary : "Nothing uploaded");
   tick(true);
 }
+async function deleteNames(names) {
+  if (jobBusy) return;
+  const list = (names || []).filter(Boolean);
+  if (!list.length) return;
+  startJob("Deleting", list[0]);
+  let ok = 0;
+  let failed = 0;
+  for (let i = 0; i < list.length; i++) {
+    const name = list[i];
+    const label = (i + 1) + " of " + list.length + " · " + name;
+    paintJob((i / list.length) * 100, "Deleting", label, "Do not refresh or leave this page until this finishes.", "");
+    try {
+      const st = await api("/api/delete", { name: name, refresh: i === list.length - 1 });
+      if (st.ok) {
+        ok += 1;
+        last.tracks = (last.tracks || []).filter((t) => t.name !== name);
+        delete selected[name];
+        delete draft[name];
+      } else {
+        failed += 1;
+      }
+    } catch (err) {
+      failed += 1;
+    }
+    paintJob(((i + 1) / list.length) * 100, "Deleting", label, "Do not refresh or leave this page until this finishes.", "");
+  }
+  const summary = ok + " deleted" + (failed ? ", " + failed + " failed" : "");
+  if (ok && !failed) finishJob(true, "Complete", summary);
+  else if (ok) finishJob(true, "Complete", summary);
+  else finishJob(false, "Failed", summary);
+  tick(true);
+}
+window.addEventListener("beforeunload", (e) => {
+  if (!jobBusy) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+document.querySelector(".tabbar").addEventListener("click", (e) => {
+  if (!jobBusy) return;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
 
 async function tick(force) {
+  if (jobBusy && !force) return;
   try {
     const st = await (await fetch("/api/status")).json();
     const lib = await (await fetch("/api/library")).json();

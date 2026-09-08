@@ -507,7 +507,7 @@ class CryptApp(object):
     def _on_end(self):
         self.next_track()
 
-    def delete_name(self, name):
+    def delete_name(self, name, refresh=True):
         base = os.path.realpath(MUSIC_DIR)
         full = os.path.realpath(os.path.join(base, name.replace("\\", "/").lstrip("/")))
         if full != base and not full.startswith(base + os.sep):
@@ -523,7 +523,8 @@ class CryptApp(object):
             return False
         CATALOG.drop_name(name.replace("\\", "/"))
         PLAYLISTS.remove_everywhere(name.replace("\\", "/"))
-        self.refresh()
+        if refresh:
+            self.refresh()
         return True
 
     def delete_names(self, names):
@@ -541,8 +542,10 @@ class CryptApp(object):
                 break
         deleted = 0
         for name in cleaned:
-            if self.delete_name(name):
+            if self.delete_name(name, refresh=False):
                 deleted += 1
+        if deleted:
+            self.refresh()
         return deleted
 
     def manage_library(self, body):
@@ -744,8 +747,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/delete":
                 name = (body.get("name") or "").strip()
-                ok = APP.delete_name(name)
-                self._send(200 if ok else 400, {"ok": ok})
+                refresh = True if body.get("refresh") is None else bool(body.get("refresh"))
+                ok = APP.delete_name(name, refresh=refresh)
+                self._send(200 if ok else 400, {"ok": ok, "name": name})
                 return
             if path == "/api/library/manage":
                 try:

@@ -343,6 +343,82 @@ input[type=range] { flex: 1; accent-color: #c45c26; height: 28px; }
   border-radius: 12px;
 }
 .drop.hot { border-color: var(--ember); background: rgba(155,28,28,0.12); color: var(--bone); }
+.drop.locked {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.job {
+  position: sticky;
+  top: calc(58px + var(--safe-top));
+  z-index: 18;
+  background: var(--card-2);
+  border: 1px solid var(--ember);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+}
+.job.hidden { display: none; }
+.job.done { border-color: rgba(134,197,111,0.7); }
+.job.fail { border-color: var(--danger); }
+.job-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.job-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+.job.done .job-title { color: var(--ok); }
+.job.fail .job-title { color: var(--danger); }
+.job-pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--bone);
+}
+.job-bar {
+  height: 12px;
+  background: #0e0b0c;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.job-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--blood), var(--ember-2));
+  border-radius: 999px;
+  transition: width 0.14s linear;
+}
+.job.done .job-fill { background: var(--ok); }
+.job.fail .job-fill { background: var(--danger); }
+.job-detail {
+  margin: 10px 0 0;
+  color: var(--bone);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-stay {
+  margin: 6px 0 0;
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
+}
+.job.done .job-stay,
+.job.fail .job-stay { color: var(--ok); }
+.job.fail .job-stay { color: var(--danger); }
 
 .tracks { list-style: none; margin: 0; padding: 0; max-height: none; }
 .tracks li {
@@ -701,6 +777,23 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid rgba(196,92,38,0.22);
+}
+body.job-busy .tabbar {
+  pointer-events: none;
+  opacity: 0.38;
+}
+body.job-busy .tabbar::before {
+  content: "Stay on this page";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -26px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ember);
+  pointer-events: none;
 }
 .tabbar a {
   color: var(--muted);
