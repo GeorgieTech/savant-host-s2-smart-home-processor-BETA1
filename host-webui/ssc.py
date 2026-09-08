@@ -23,16 +23,6 @@ DEFAULT_DEVICES = (
         "relays": 7,
         "uid": "001AAE01C4D20021",
     },
-    {
-        "id": "ssc12",
-        "model": "SSC-0012",
-        "title": "SmartControl 12",
-        "host": os.environ.get("SSC12_HOST", "192.168.1.138"),
-        "port": int(os.environ.get("SSC12_PORT", "23")),
-        "relays": 2,
-        "timeout": 1.5,
-        "uid": "001AAE13DF600020",
-    },
 )
 
 _ALLOWED = re.compile(r"^(show|relay on [0-9]|relay off [0-9])$")
@@ -443,6 +433,9 @@ class AvdHost(object):
                 continue
             rec = self._parse_beacon(data, addr)
             if rec and rec.get("uid") == self.uid:
+                rec = None
+            known = set(c.host for c in self.clients)
+            if rec and rec["ip"] not in known:
                 rec = None
             if rec:
                 with self.lock:

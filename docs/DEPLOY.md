@@ -54,4 +54,4 @@ Open http://192.168.1.179/
 - No `apt`. Yocto image.
 - Python 3.8 stdlib only.
 - DualLite / 1 GB — keep BETA1 to library + TOSLINK + SSC telnet clients. No extra daemons.
-- SSC-0014 `192.168.1.136:23` and SSC-0012 `192.168.1.138:23`. See [SSC.md](SSC.md).
+- SSC-0014 `192.168.1.136:23`. See [SSC.md](SSC.md).

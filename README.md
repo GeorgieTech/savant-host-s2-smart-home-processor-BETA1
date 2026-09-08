@@ -14,7 +14,7 @@ Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident
 - Upload MP3 / FLAC / Opus / OGG / WAV / M4A / AAC to `/data/music`
 - Play through the SHR-S2 **TOSLINK** jack (`ffmpeg` → `paplay` → Pulse → `imx-spdif`)
 - Play / pause / seek / next / prev / volume / delete
-- **Relays** page drives **SSC-0014** (`192.168.1.136`, 7 relays) and **SSC-0012** (`192.168.1.138`, 2 relays)
+- **Relays** page drives **SSC-0014** (`192.168.1.136`, 7 relays)
 - Dark mobile-style web app (Add to Home Screen)
 
 No AirPlay, Spotify, DLNA, or NAS in BETA1. DualLite + 1 GB RAM.
