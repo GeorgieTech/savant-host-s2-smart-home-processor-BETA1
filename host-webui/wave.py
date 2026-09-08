@@ -5,6 +5,7 @@ from __future__ import print_function
 import hashlib
 import json
 import os
+import select
 import struct
 import subprocess
 import threading
@@ -98,7 +99,43 @@ def _scale_band(vals, percentile=0.96, gamma=0.72, gain=1.0, gate=0.05):
     return out
 
 
-def _analyze(full):
+def _probe_duration(full):
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                full,
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+        ).strip()
+        dur = float(out)
+        return dur if dur > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _analyze(full, on_progress=None):
+    def report(pct, stage):
+        if on_progress:
+            try:
+                on_progress(int(max(0, min(99, pct))), stage)
+            except Exception:
+                pass
+
+    report(1, "Starting")
+    expect = 0
+    dur = _probe_duration(full)
+    if dur > 0:
+        expect = int(dur * RATE * 12)
+        report(3, "Analyzing waveform")
     cmd = [
         "ffmpeg",
         "-nostdin",
@@ -124,20 +161,70 @@ def _analyze(full):
         stderr=subprocess.DEVNULL,
         preexec_fn=_lower_nice,
     )
+    raw = bytearray()
+    deadline = time.monotonic() + 90
+    t0 = time.monotonic()
+    last_pct = 3
+    fd = proc.stdout.fileno() if proc.stdout else None
     try:
-        raw, _err = proc.communicate(timeout=90)
-    except subprocess.TimeoutExpired:
+        while time.monotonic() < deadline:
+            if fd is None:
+                break
+            ready, _, _ = select.select([proc.stdout], [], [], 0.4)
+            if not ready:
+                if proc.poll() is not None:
+                    rest = proc.stdout.read() or b""
+                    if rest:
+                        raw.extend(rest)
+                    break
+                elapsed = time.monotonic() - t0
+                if expect <= 0:
+                    guess = min(88, 4 + int(elapsed / 25.0 * 84))
+                    if guess > last_pct:
+                        last_pct = guess
+                        report(guess, "Analyzing waveform")
+                continue
+            buf = os.read(fd, 12 * 512)
+            if not buf:
+                break
+            raw.extend(buf)
+            if expect > 0:
+                pct = min(96, 4 + int(len(raw) * 92 / float(expect)))
+            else:
+                pct = min(88, 4 + int((time.monotonic() - t0) / 25.0 * 84))
+            if pct > last_pct:
+                last_pct = pct
+                report(pct, "Analyzing waveform")
+            if len(raw) > MAX_FRAMES * 12 * 8:
+                break
+        timed_out = time.monotonic() >= deadline
+        if proc.poll() is None:
+            if timed_out:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.communicate()
+                except Exception:
+                    pass
+            else:
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+    except Exception:
         try:
             proc.kill()
-        except Exception:
-            pass
-        try:
-            proc.communicate()
         except Exception:
             pass
         return None
     if not raw:
         return None
+    report(97, "Building bands")
     frame = 12
     n = len(raw) // frame
     if n < 8:
@@ -182,6 +269,7 @@ class WaveIndex(object):
         self.busy = set()
         self.queue = []
         self.error = {}
+        self.progress = {}
         t = threading.Thread(target=self._loop, name="wave-scan", daemon=True)
         t.start()
 
@@ -216,10 +304,24 @@ class WaveIndex(object):
         self.ensure(rel, front=True)
         with self.lock:
             err = self.error.get(rel)
-            analyzing = rel in self.busy or rel in self.queue
+            busy = rel in self.busy
+            queued = rel in self.queue
+            prog = dict(self.progress.get(rel) or {})
         if err:
-            return {"ok": False, "name": rel, "analyzing": False, "error": err}
-        return {"ok": False, "name": rel, "analyzing": True}
+            return {"ok": False, "name": rel, "analyzing": False, "error": err, "progress": 0}
+        if queued and not busy:
+            stage = "Waiting to analyze"
+            pct = 0
+        else:
+            stage = prog.get("stage") or "Analyzing waveform"
+            pct = int(prog.get("pct") or 0)
+        return {
+            "ok": False,
+            "name": rel,
+            "analyzing": True,
+            "progress": max(0, min(99, pct)),
+            "stage": stage,
+        }
 
     def ensure(self, rel, front=False):
         rel = (rel or "").replace("\\", "/").lstrip("/")
@@ -235,6 +337,12 @@ class WaveIndex(object):
                 self.queue.insert(0, rel)
             else:
                 self.queue.append(rel)
+            if rel not in self.progress:
+                self.progress[rel] = {"pct": 0, "stage": "Waiting to analyze"}
+
+    def _mark(self, rel, pct, stage):
+        with self.lock:
+            self.progress[rel] = {"pct": int(max(0, min(100, pct))), "stage": stage}
 
     def _loop(self):
         while True:
@@ -273,11 +381,14 @@ class WaveIndex(object):
                     return
             except (OSError, ValueError):
                 pass
-        data = _analyze(full)
+        self._mark(rel, 1, "Starting")
+        data = _analyze(full, lambda pct, stage: self._mark(rel, pct, stage))
         if not data:
             with self.lock:
                 self.error[rel] = "analyze failed"
+                self.progress.pop(rel, None)
             return
+        self._mark(rel, 100, "Complete")
         data["name"] = rel
         try:
             os.makedirs(WAVE_DIR, exist_ok=True)

@@ -35,14 +35,45 @@
       <div class="now" id="now">Nothing playing</div>
       <div class="meta" id="meta">0:00 / 0:00</div>
       <div class="clock-stats" id="clockstats">
-        <div><span class="k">Time Clock</span><span class="v" id="clk-heard">0:00.000</span></div>
-        <div><span class="k">Playback</span><span class="v" id="clk-play">0:00.000</span></div>
-        <div><span class="k">Offset</span><span class="v" id="clk-off">—</span></div>
-        <div><span class="k">Clock</span><span class="v" id="clk-lock">idle</span></div>
+        <div class="clock-hero">
+          <div class="clk-delta" id="clk-off">—</div>
+          <div class="clk-delta-l" id="clk-off-l">Time Clock vs playback</div>
+        </div>
+        <div class="clock-times">
+          <div class="clock-col heard">
+            <span class="k">Time Clock</span>
+            <span class="v" id="clk-heard">0:00.000</span>
+            <span class="clk-sub">what you hear</span>
+          </div>
+          <div class="clock-col play">
+            <span class="k">Playback</span>
+            <span class="v" id="clk-play">0:00.000</span>
+            <span class="clk-sub">decoder</span>
+          </div>
+        </div>
+        <div class="clock-lane" id="clk-lane" aria-hidden="true">
+          <div class="clock-lane-span" id="clk-span"></div>
+          <div class="clock-mark heard" id="clk-mark-h"></div>
+          <div class="clock-mark play" id="clk-mark-p"></div>
+        </div>
+        <div class="clock-legend">
+          <span class="heard">Time Clock</span>
+          <span class="play">Playback</span>
+          <span id="clk-lock">idle</span>
+        </div>
         <p class="clock-note" id="clk-note">Host Time Clock vs decoder timing</p>
       </div>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
+        <div class="wave-progress hidden" id="waveprog">
+          <div class="wave-progress-head">
+            <span id="wavestage">Analyzing waveform</span>
+            <span id="wavepct">0%</span>
+          </div>
+          <div class="wave-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="wavebar">
+            <div class="wave-progress-fill" id="wavefill"></div>
+          </div>
+        </div>
         <div class="wave-legend">
           <span class="lo">Lows</span>
           <span class="mid">Mids</span>
@@ -280,7 +311,7 @@ let playClock = {
   at: 0, heard: 0, playback: 0, pos: 0, playing: false, duration: 0, name: "",
   latency_ms: 0, buffer_ms: 0, sink_ms: 0, paplay_ms: 90, locked: false
 };
-let rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0, zoomSec: 10 };
+let rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0, zoomSec: 10, progress: 0, stage: "", progTimer: 0 };
 const ZOOM_STEPS = [2, 3, 4, 6, 8, 10, 12, 16, 24, 32, 48];
 function zoomWindow() {
   const dur = playClock.duration || 12;
@@ -316,7 +347,21 @@ function paintClockStats(heard, playback) {
   $("clk-heard").textContent = fmt3(heard);
   $("clk-play").textContent = fmt3(playback);
   const off = Math.max(0, Math.round((playback - heard) * 1000));
-  $("clk-off").textContent = playClock.name ? (off + " ms") : "—";
+  const delta = $("clk-off");
+  const lab = $("clk-off-l");
+  if (!playClock.name) {
+    delta.textContent = "—";
+    delta.className = "clk-delta";
+    lab.textContent = "Time Clock vs playback";
+  } else if (off <= 20) {
+    delta.textContent = "in sync";
+    delta.className = "clk-delta sync";
+    lab.textContent = "Time Clock matches playback";
+  } else {
+    delta.textContent = off + " ms";
+    delta.className = "clk-delta";
+    lab.textContent = "behind playback";
+  }
   const lock = $("clk-lock");
   let label = "idle";
   let kind = "loose";
@@ -324,13 +369,48 @@ function paintClockStats(heard, playback) {
   else if (playClock.playing) { label = "locking"; kind = "loose"; }
   else if (playClock.name) { label = "frozen"; kind = "loose"; }
   lock.textContent = label;
-  lock.className = "v " + kind;
+  lock.className = kind;
+  const win = Math.max(600, off * 1.8, 1);
+  const gap = off / win;
+  const start = (1 - gap) * 0.5;
+  const end = start + gap;
+  const span = $("clk-span");
+  const mh = $("clk-mark-h");
+  const mp = $("clk-mark-p");
+  if (span && mh && mp) {
+    const left = (start * 100).toFixed(2);
+    const width = Math.max(0.8, gap * 100).toFixed(2);
+    span.style.left = left + "%";
+    span.style.width = width + "%";
+    mh.style.left = "calc(" + left + "% - 2px)";
+    mp.style.left = "calc(" + (end * 100).toFixed(2) + "% - 3px)";
+  }
   const buf = playClock.buffer_ms || 0;
   const sink = playClock.sink_ms || 0;
   const pap = playClock.paplay_ms || 90;
   $("clk-note").textContent = playClock.name
-    ? ("buffer " + buf + " ms · TOSLINK " + sink + " ms · paplay " + pap + " ms")
-    : "Host Time Clock vs decoder timing";
+    ? ("Path delay " + off + " ms · buffer " + buf + " ms · TOSLINK " + sink + " ms · paplay " + pap + " ms")
+    : "Cream is Time Clock (what TOSLINK is emitting). Ember is decoder playback.";
+}
+function showWaveProgress(on, pct, stage) {
+  const el = $("waveprog");
+  if (!el) return;
+  if (rw.progTimer) {
+    clearTimeout(rw.progTimer);
+    rw.progTimer = 0;
+  }
+  if (!on) {
+    el.classList.add("hidden");
+    el.classList.remove("done");
+    return;
+  }
+  const n = Math.max(0, Math.min(100, Math.round(pct || 0)));
+  el.classList.remove("hidden");
+  el.classList.toggle("done", stage === "Complete" || n >= 100);
+  $("wavestage").textContent = stage || "Analyzing waveform";
+  $("wavepct").textContent = n + "%";
+  $("wavefill").style.width = n + "%";
+  $("wavebar").setAttribute("aria-valuenow", String(n));
 }
 function loadWave(name) {
   if (!name) {
@@ -338,28 +418,49 @@ function loadWave(name) {
     rw.n = 0;
     rw.l = []; rw.m = []; rw.h = [];
     rw.analyzing = false;
+    rw.progress = 0;
+    showWaveProgress(false);
     return;
   }
   if (rw.name === name && rw.n) return;
-  if (rw.name === name && rw.analyzing) return;
-  rw.name = name;
-  rw.n = 0;
-  rw.l = []; rw.m = []; rw.h = [];
-  rw.analyzing = true;
+  if (rw.name !== name) {
+    if (rw.timer) clearTimeout(rw.timer);
+    rw.name = name;
+    rw.n = 0;
+    rw.l = []; rw.m = []; rw.h = [];
+    rw.analyzing = true;
+    rw.progress = 0;
+    rw.stage = "Starting";
+    showWaveProgress(true, 1, "Starting");
+  }
   fetch("/api/wave?name=" + encodeURIComponent(name)).then((r) => r.json()).then((data) => {
     if (rw.name !== name) return;
     if (data && data.ok && data.l && data.l.length) {
       rw.l = data.l; rw.m = data.m; rw.h = data.h;
       rw.n = data.n || data.l.length;
       rw.analyzing = false;
+      rw.progress = 100;
+      showWaveProgress(true, 100, "Complete");
+      rw.progTimer = setTimeout(() => showWaveProgress(false), 1400);
     } else if (data && data.analyzing) {
       rw.analyzing = true;
+      rw.progress = data.progress || 0;
+      rw.stage = data.stage || "Analyzing waveform";
+      showWaveProgress(true, rw.progress, rw.stage);
       if (rw.timer) clearTimeout(rw.timer);
-      rw.timer = setTimeout(() => { rw.name = ""; loadWave(name); }, 1200);
+      rw.timer = setTimeout(() => {
+        if (rw.name === name) loadWave(name);
+      }, 400);
     } else {
       rw.analyzing = false;
+      showWaveProgress(false);
     }
-  }).catch(() => { rw.analyzing = false; });
+  }).catch(() => {
+    if (rw.name === name) {
+      rw.analyzing = false;
+      showWaveProgress(false);
+    }
+  });
 }
 $("viz").addEventListener("click", () => { unlockAudio(); toggle(); });
 document.addEventListener("pointerdown", unlockAudio);
@@ -544,10 +645,12 @@ function paintScroll(s, pos, dur) {
   ctx.fillStyle = "rgba(196,92,38,0.18)";
   ctx.fillRect(0, h / 2, w, Math.max(1, s.dpr));
   if (!rw.n) {
-    ctx.fillStyle = "rgba(154,141,124,0.9)";
-    ctx.font = (11 * s.dpr) + "px Outfit, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(rw.analyzing ? "Analyzing waveform…" : "Play a track to build its 3-band waveform", w / 2, h / 2 + 4 * s.dpr);
+    if (!rw.analyzing) {
+      ctx.fillStyle = "rgba(154,141,124,0.9)";
+      ctx.font = (11 * s.dpr) + "px Outfit, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Play a track to build its 3-band waveform", w / 2, h / 2 + 4 * s.dpr);
+    }
     return;
   }
   const n = rw.n;
@@ -574,6 +677,14 @@ function paintScroll(s, pos, dur) {
     }
   }
   const px = w * 0.34;
+  const lag = Math.max(0, (nowClock("playback") || 0) - pos);
+  if (lag > 0.02 && win > 0) {
+    const x1 = w * (0.34 + lag / win);
+    ctx.fillStyle = "rgba(224,122,58,0.22)";
+    ctx.fillRect(px, 0, Math.max(2, x1 - px), h);
+    ctx.fillStyle = "#e07a3a";
+    ctx.fillRect(x1, 0, Math.max(2, s.dpr), h);
+  }
   ctx.fillStyle = "rgba(243,230,200,0.95)";
   ctx.fillRect(px, 0, Math.max(2, s.dpr), h);
 }
@@ -603,9 +714,17 @@ function paintOver(s, pos, dur) {
     }
   }
   if (dur > 0) {
-    const px = (pos / dur) * w;
+    const play = nowClock("playback") || pos;
+    const xPlay = (play / dur) * w;
+    const xHeard = (pos / dur) * w;
+    if (Math.abs(xPlay - xHeard) > 1) {
+      ctx.fillStyle = "rgba(224,122,58,0.28)";
+      ctx.fillRect(Math.min(xHeard, xPlay), 0, Math.max(2, Math.abs(xPlay - xHeard)), h);
+      ctx.fillStyle = "#e07a3a";
+      ctx.fillRect(xPlay, 0, Math.max(2, s.dpr), h);
+    }
     ctx.fillStyle = "rgba(243,230,200,0.95)";
-    ctx.fillRect(px, 0, Math.max(2, s.dpr), h);
+    ctx.fillRect(xHeard, 0, Math.max(2, s.dpr), h);
   }
 }
 

@@ -140,23 +140,46 @@ body.is-playing {
 .meta.tight { margin: 0; text-align: right; letter-spacing: 0.04em; }
 .nowcard .meta { text-align: center; }
 .clock-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 14px;
   margin: -2px 0 14px;
-  padding: 10px 12px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   background: rgba(0,0,0,0.22);
   font-variant-numeric: tabular-nums;
 }
-.clock-stats div {
+.clock-hero {
+  text-align: center;
+  margin: 0 0 10px;
+}
+.clk-delta {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--ember);
+  line-height: 1.1;
+}
+.clk-delta.sync { color: var(--ok); }
+.clk-delta-l {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.clock-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.clock-col {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
 }
+.clock-col.play { text-align: right; align-items: flex-end; }
 .clock-stats .k {
   color: var(--muted);
   letter-spacing: 0.1em;
@@ -166,14 +189,69 @@ body.is-playing {
 }
 .clock-stats .v {
   color: var(--bone);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: 18px;
+  font-weight: 700;
 }
-.clock-stats .v.lock { color: var(--ok); }
-.clock-stats .v.loose { color: var(--ember); }
+.clock-col.heard .v { color: #f3e6c8; }
+.clock-col.play .v { color: #e07a3a; }
+.clk-sub {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.clock-lane {
+  position: relative;
+  height: 18px;
+  margin: 12px 0 8px;
+  background: #0e0b0c;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.clock-lane-span {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: rgba(224,122,58,0.38);
+  border-radius: 99px;
+}
+.clock-mark {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 5px;
+  border-radius: 99px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+}
+.clock-mark.heard { background: #f3e6c8; }
+.clock-mark.play { background: #e07a3a; }
+.clock-legend {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.clock-legend .heard::before,
+.clock-legend .play::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.clock-legend .heard::before { background: #f3e6c8; }
+.clock-legend .play::before { background: #e07a3a; }
+.clock-legend #clk-lock.lock { color: var(--ok); }
+.clock-legend #clk-lock.loose { color: var(--ember); }
 .clock-note {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
+  margin: 8px 0 0;
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.04em;
@@ -215,6 +293,48 @@ canvas#wscroll {
   cursor: pointer;
   touch-action: none;
 }
+.wave-progress {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(9,7,10,0.88);
+  border: 1px solid rgba(196,92,38,0.4);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.wave-progress.hidden { display: none; }
+.wave-progress.done { border-color: rgba(134,197,111,0.7); }
+.wave-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+.wave-progress.done .wave-progress-head { color: var(--ok); }
+.wave-progress-bar {
+  height: 10px;
+  background: #0e0b0c;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.wave-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--blood), var(--ember-2));
+  border-radius: 999px;
+  transition: width 0.25s linear;
+}
+.wave-progress.done .wave-progress-fill { background: var(--ok); }
 .wave-legend {
   display: flex;
   gap: 12px;
