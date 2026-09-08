@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
+from library import CATALOG, PLAYLISTS
 from ssc import SscHub
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -218,23 +219,7 @@ def _safe_filename(name):
 
 
 def _library():
-    base = os.path.realpath(MUSIC_DIR)
-    out = []
-    if not os.path.isdir(base):
-        return out
-    for dirpath, _dirs, files in os.walk(base):
-        for fn in files:
-            if os.path.splitext(fn)[1].lower() not in AUDIO_EXT:
-                continue
-            full = os.path.join(dirpath, fn)
-            rel = os.path.relpath(full, base).replace("\\", "/")
-            try:
-                size = os.path.getsize(full)
-            except OSError:
-                size = 0
-            out.append({"name": rel, "size": size})
-    out.sort(key=lambda x: x["name"].lower())
-    return out
+    return CATALOG.tracks()
 
 
 def _disk():
@@ -299,6 +284,31 @@ def _ssc_parts(path):
     return bits[0], (bits[1] if len(bits) > 1 else None)
 
 
+def _playlist_action(body):
+    action = str(body.get("action") or "").strip().lower()
+    pid = str(body.get("id") or "").strip()
+    names = CATALOG.names()
+    if action == "create":
+        pl = PLAYLISTS.create(body.get("name"))
+        return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
+    if action == "rename":
+        pl = PLAYLISTS.rename(pid, body.get("name"))
+        return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
+    if action == "delete":
+        PLAYLISTS.delete(pid)
+        return {"ok": True, "playlists": PLAYLISTS.list(names)}
+    if action == "add":
+        name = (body.get("name") or "").strip()
+        if name not in set(names):
+            raise ValueError("track not in library")
+        pl = PLAYLISTS.add(pid, name)
+        return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
+    if action == "remove":
+        pl = PLAYLISTS.remove_track(pid, body.get("name"))
+        return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
+    raise ValueError("need action create/rename/delete/add/remove")
+
+
 def _on_flag(body):
     if "on" in body:
         return _as_bool(body.get("on"))
@@ -316,6 +326,7 @@ class CryptApp(object):
         self.lock = threading.Lock()
         self.index = -1
         self.tracks = []
+        self.order = []
         self.player = HostPlayer(on_end=self._on_end)
         self.player.set_eq(_load_eq())
         self.refresh()
@@ -324,25 +335,34 @@ class CryptApp(object):
         with self.lock:
             self.tracks = _library()
             names = [t["name"] for t in self.tracks]
+            name_set = set(names)
+            self.order = [n for n in self.order if n in name_set]
+            if not self.order:
+                self.order = list(names)
             cur = self.player.snapshot().get("name") or ""
-            if cur in names:
-                self.index = names.index(cur)
-            elif self.index >= len(self.tracks):
-                self.index = len(self.tracks) - 1 if self.tracks else -1
+            if cur in self.order:
+                self.index = self.order.index(cur)
+            elif self.index >= len(self.order):
+                self.index = len(self.order) - 1 if self.order else -1
 
-    def _upcoming(self, tracks, idx, limit=5):
-        n = len(tracks)
+    def _upcoming(self, order, tracks, idx, limit=5):
+        by_name = dict((t["name"], t) for t in tracks)
+        n = len(order)
         if n == 0:
             return [], 0
         if idx < 0 or idx >= n:
-            items = [{"name": t["name"], "size": t["size"]} for t in tracks[:limit]]
+            items = []
+            for name in order[:limit]:
+                t = by_name.get(name) or {"name": name, "size": 0}
+                items.append({"name": t["name"], "size": t.get("size") or 0, "title": t.get("title") or ""})
             return items, n
         if n == 1:
             return [], 0
         items = []
         for i in range(1, n):
-            t = tracks[(idx + i) % n]
-            items.append({"name": t["name"], "size": t["size"]})
+            name = order[(idx + i) % n]
+            t = by_name.get(name) or {"name": name, "size": 0}
+            items.append({"name": t["name"], "size": t.get("size") or 0, "title": t.get("title") or ""})
             if len(items) >= limit:
                 break
         return items, n - 1
@@ -352,8 +372,9 @@ class CryptApp(object):
         snap = self.player.snapshot()
         with self.lock:
             tracks = list(self.tracks)
+            order = list(self.order)
             idx = self.index
-        queue, queue_total = self._upcoming(tracks, idx, 5)
+        queue, queue_total = self._upcoming(order, tracks, idx, 5)
         eq = clamp_eq(snap.get("eq"))
         return {
             "host": socket.gethostname(),
@@ -391,41 +412,66 @@ class CryptApp(object):
         self.player.set_eq(eq)
         return self.eq_state()
 
-    def play_name(self, name, start=0.0):
+    def play_name(self, name, start=0.0, order=None):
         self.refresh()
         with self.lock:
             names = [t["name"] for t in self.tracks]
-            if name not in names:
+            name_set = set(names)
+            if order:
+                cleaned = []
+                seen = set()
+                for item in order:
+                    item = str(item or "").strip()
+                    if item in name_set and item not in seen:
+                        cleaned.append(item)
+                        seen.add(item)
+                    if len(cleaned) >= 300:
+                        break
+                if cleaned:
+                    self.order = cleaned
+            if not self.order:
+                self.order = list(names)
+            if name not in name_set:
                 return False
-            self.index = names.index(name)
+            if name not in self.order:
+                self.order = list(names)
+            if name not in self.order:
+                return False
+            self.index = self.order.index(name)
         return self.player.play(name, start=start)
+
+    def play_playlist(self, pid):
+        pl = PLAYLISTS.get(pid)
+        if not pl or not pl.get("tracks"):
+            return False
+        return self.play_name(pl["tracks"][0], order=pl["tracks"])
 
     def play_index(self, idx):
         self.refresh()
         with self.lock:
-            if not self.tracks:
+            if not self.order:
                 return False
-            idx = idx % len(self.tracks)
+            idx = idx % len(self.order)
             self.index = idx
-            name = self.tracks[idx]["name"]
+            name = self.order[idx]
         return self.player.play(name, start=0.0)
 
     def next_track(self):
         self.refresh()
         with self.lock:
-            if not self.tracks:
+            if not self.order:
                 return False
-            self.index = 0 if self.index < 0 else (self.index + 1) % len(self.tracks)
-            name = self.tracks[self.index]["name"]
+            self.index = 0 if self.index < 0 else (self.index + 1) % len(self.order)
+            name = self.order[self.index]
         return self.player.play(name)
 
     def prev_track(self):
         self.refresh()
         with self.lock:
-            if not self.tracks:
+            if not self.order:
                 return False
-            self.index = 0 if self.index < 0 else (self.index - 1) % len(self.tracks)
-            name = self.tracks[self.index]["name"]
+            self.index = 0 if self.index < 0 else (self.index - 1) % len(self.order)
+            name = self.order[self.index]
         return self.player.play(name)
 
     def _on_end(self):
@@ -445,6 +491,8 @@ class CryptApp(object):
             os.remove(full)
         except OSError:
             return False
+        CATALOG.drop_name(name.replace("\\", "/"))
+        PLAYLISTS.remove_everywhere(name.replace("\\", "/"))
         self.refresh()
         return True
 
@@ -492,7 +540,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/library":
                 APP.refresh()
-                self._send(200, {"tracks": _library(), "disk": _disk()})
+                tracks = _library()
+                self._send(
+                    200,
+                    {
+                        "tracks": tracks,
+                        "disk": _disk(),
+                        "scanning": bool(CATALOG.scanning),
+                        "playlists": PLAYLISTS.list([t["name"] for t in tracks]),
+                    },
+                )
+                return
+            if raw_path == "/api/playlists":
+                tracks = _library()
+                self._send(200, {"playlists": PLAYLISTS.list([t["name"] for t in tracks])})
                 return
             if raw_path == "/api/eq":
                 self._send(200, APP.eq_state())
@@ -562,9 +623,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = _json_body(self)
             if path == "/api/play":
+                if body.get("playlist"):
+                    ok = APP.play_playlist(body.get("playlist"))
+                    self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
+                    return
                 name = (body.get("name") or "").strip()
-                ok = APP.play_name(name, start=body.get("start") or 0)
+                order = body.get("order") if isinstance(body.get("order"), list) else None
+                ok = APP.play_name(name, start=body.get("start") or 0, order=order)
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
+                return
+            if path == "/api/playlists":
+                try:
+                    payload = _playlist_action(body)
+                except KeyError as exc:
+                    self._send(404, {"ok": False, "error": str(exc)})
+                    return
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                    return
+                self._send(200, payload)
                 return
             if path == "/api/pause":
                 ok = APP.player.pause()

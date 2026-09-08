@@ -18,7 +18,7 @@ From the repo root:
 
 ```sh
 scp -O host-webui/index.html host-webui/library.html host-webui/eq.html host-webui/controls.html host-webui/crypt.css \
-  host-webui/server.py host-webui/player.py host-webui/ssc.py \
+  host-webui/server.py host-webui/player.py host-webui/ssc.py host-webui/library.py \
   host-webui/manifest.webmanifest host-webui/favicon.svg \
   host-webui/icon.png host-webui/apple-touch-icon.png \
   host-webui/pin-hostname.sh \
@@ -33,7 +33,7 @@ Then on the host, as root via `sudo env bash`:
 mkdir -p /data/www /data/music
 chown RPM:RPM /data/www /data/music
 cp /tmp/index.html /tmp/library.html /tmp/eq.html /tmp/controls.html /tmp/crypt.css \
-  /tmp/server.py /tmp/player.py /tmp/ssc.py /tmp/pin-hostname.sh \
+  /tmp/server.py /tmp/player.py /tmp/ssc.py /tmp/library.py /tmp/pin-hostname.sh \
   /tmp/manifest.webmanifest /tmp/favicon.svg /tmp/icon.png /tmp/apple-touch-icon.png \
   /data/www/
 chmod +x /data/www/pin-hostname.sh /data/www/server.py

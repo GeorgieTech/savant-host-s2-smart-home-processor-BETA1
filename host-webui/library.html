@@ -37,11 +37,29 @@
         <h2>Library</h2>
         <span class="meta tight" id="disk"></span>
       </div>
-      <input class="search" id="filter" type="search" placeholder="Filter tracks" autocomplete="off">
-      <ul class="tracks" id="tracks"></ul>
+      <div class="lib-toggle" id="toggle" role="tablist">
+        <button type="button" data-view="artists" class="on">Artists</button>
+        <button type="button" data-view="albums">Albums</button>
+        <button type="button" data-view="tracks">Tracks</button>
+        <button type="button" data-view="playlists">Playlists</button>
+      </div>
+      <input class="search" id="filter" type="search" placeholder="Search this view" autocomplete="off">
+      <nav class="crumbs" id="crumbs"></nav>
+      <div class="row" id="actions" hidden></div>
+      <ul class="tracks" id="list"></ul>
       <div class="err" id="err"></div>
     </section>
   </main>
+  <div class="picker hidden" id="picker">
+    <div class="picker-card">
+      <h2>Add to playlist</h2>
+      <div id="picker-list"></div>
+      <div class="row">
+        <button type="button" class="primary" id="picker-new">New playlist</button>
+        <button type="button" class="ghost" id="picker-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
   <nav class="tabbar">
     <a href="/">Playing</a>
     <a class="on" href="/library">Library</a>
@@ -51,7 +69,13 @@
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-let last = { tracks: [], player: {} };
+let last = { tracks: [], playlists: [], player: {} };
+let view = "artists";
+let artist = "";
+let album = "";
+let playlistId = "";
+let addTarget = "";
+let stamp = "";
 
 function pretty(n) {
   if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
@@ -63,8 +87,15 @@ function esc(s) {
     "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
   }[c]));
 }
-function titleOf(name) {
-  return String(name || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+function titleOf(t) {
+  if (t && t.title) return t.title;
+  return String((t && t.name) || t || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+}
+function q() { return ($("filter").value || "").trim().toLowerCase(); }
+function hit(t) {
+  const s = q();
+  if (!s) return true;
+  return [t.title, t.artist, t.album, t.name, t.genre].some((v) => String(v || "").toLowerCase().indexOf(s) >= 0);
 }
 async function api(path, body) {
   const opt = body === undefined ? { method: "POST" } : {
@@ -75,12 +106,284 @@ async function api(path, body) {
   const r = await fetch(path, opt);
   return r.json();
 }
-async function playName(name) { await api("/api/play", { name }); tick(); }
+function tracks() { return last.tracks || []; }
+function playlists() { return last.playlists || []; }
+function playingName() { return (last.player && last.player.name) || ""; }
+
+function artists() {
+  const map = {};
+  tracks().filter(hit).forEach((t) => {
+    const k = t.artist || "Unknown artist";
+    if (!map[k]) map[k] = { name: k, count: 0 };
+    map[k].count += 1;
+  });
+  return Object.keys(map).sort((a, b) => a.localeCompare(b)).map((k) => map[k]);
+}
+function albums(forArtist) {
+  const map = {};
+  tracks().filter(hit).forEach((t) => {
+    if (forArtist && t.artist !== forArtist) return;
+    const key = (t.artist || "") + "\n" + (t.album || "Unknown album");
+    if (!map[key]) map[key] = { artist: t.artist, album: t.album || "Unknown album", count: 0, key: key };
+    map[key].count += 1;
+  });
+  return Object.keys(map).sort((a, b) => a.localeCompare(b)).map((k) => map[k]);
+}
+function viewTracks() {
+  return tracks().filter((t) => {
+    if (artist && t.artist !== artist) return false;
+    if (album && t.album !== album) return false;
+    return hit(t);
+  });
+}
+function playlistTracks(pl) {
+  const by = {};
+  tracks().forEach((t) => { by[t.name] = t; });
+  return (pl.tracks || []).map((n) => by[n]).filter(Boolean);
+}
+
+async function playList(list, start) {
+  const names = (list || []).map((t) => t.name).filter(Boolean);
+  if (!names.length) return;
+  const name = start || names[0];
+  await api("/api/play", { name: name, order: names });
+  tick();
+}
 async function delName(name, ev) {
   ev.stopPropagation();
   if (!confirm("Delete “" + name + "” from the library?")) return;
   await api("/api/delete", { name });
-  tick();
+  tick(true);
+}
+
+function openPicker(name, ev) {
+  if (ev) ev.stopPropagation();
+  addTarget = name;
+  const box = $("picker-list");
+  box.innerHTML = "";
+  const pls = playlists();
+  if (!pls.length) {
+    box.innerHTML = "<p class='hint'>No playlists yet.</p>";
+  } else {
+    pls.forEach((p) => {
+      const b = document.createElement("button");
+      b.textContent = p.name + " · " + p.count;
+      b.onclick = () => addTo(p.id);
+      box.appendChild(b);
+    });
+  }
+  $("picker").classList.remove("hidden");
+}
+async function addTo(pid) {
+  if (!addTarget) return;
+  const st = await api("/api/playlists", { action: "add", id: pid, name: addTarget });
+  if (!st.ok) { $("err").textContent = st.error || "could not add"; return; }
+  last.playlists = st.playlists || last.playlists;
+  $("picker").classList.add("hidden");
+  addTarget = "";
+  render();
+}
+$("picker-cancel").onclick = () => { $("picker").classList.add("hidden"); addTarget = ""; };
+$("picker-new").onclick = async () => {
+  const name = prompt("Playlist name");
+  if (!name) return;
+  const st = await api("/api/playlists", { action: "create", name: name });
+  if (!st.ok) { $("err").textContent = st.error || "could not create"; return; }
+  last.playlists = st.playlists || [];
+  if (addTarget && st.playlist) await addTo(st.playlist.id);
+  else { $("picker").classList.add("hidden"); render(); }
+};
+
+document.querySelectorAll("#toggle [data-view]").forEach((btn) => {
+  btn.onclick = () => {
+    view = btn.dataset.view;
+    artist = "";
+    album = "";
+    playlistId = "";
+    $("filter").placeholder = view === "playlists" ? "Search playlists" : "Search this view";
+    render();
+  };
+});
+$("filter").addEventListener("input", () => render());
+
+function crumb(label, fn) {
+  const a = document.createElement("button");
+  a.className = "crumb";
+  a.type = "button";
+  a.textContent = label;
+  if (fn) a.onclick = fn;
+  else a.disabled = true;
+  return a;
+}
+function paintCrumbs() {
+  const el = $("crumbs");
+  el.innerHTML = "";
+  if (view === "artists") {
+    el.appendChild(crumb("Artists", artist || album ? () => { artist = ""; album = ""; render(); } : null));
+    if (artist) el.appendChild(crumb(artist, album ? () => { album = ""; render(); } : null));
+    if (album) el.appendChild(crumb(album, null));
+  } else if (view === "albums") {
+    el.appendChild(crumb("Albums", album ? () => { album = ""; artist = ""; render(); } : null));
+    if (album) el.appendChild(crumb(album, null));
+  } else if (view === "playlists") {
+    el.appendChild(crumb("Playlists", playlistId ? () => { playlistId = ""; render(); } : null));
+    const pl = playlists().filter((p) => p.id === playlistId)[0];
+    if (pl) el.appendChild(crumb(pl.name, null));
+  } else {
+    el.appendChild(crumb("Tracks", null));
+  }
+}
+
+function rowTrack(t, opts) {
+  const li = document.createElement("li");
+  if (t.name === playingName()) li.className = "on";
+  const sub = [t.artist, t.album].filter(Boolean).join(" · ");
+  li.innerHTML = "<div class='grow'><div class='name'>" + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
+  if (!(opts && opts.noAdd)) {
+    const add = document.createElement("button");
+    add.textContent = "Add";
+    add.onclick = (e) => openPicker(t.name, e);
+    li.appendChild(add);
+  }
+  if (opts && opts.remove) {
+    const rm = document.createElement("button");
+    rm.textContent = "Remove";
+    rm.onclick = (e) => opts.remove(t.name, e);
+    li.appendChild(rm);
+  } else {
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.onclick = (e) => delName(t.name, e);
+    li.appendChild(del);
+  }
+  li.onclick = () => playList(opts && opts.order ? opts.order : viewTracks(), t.name);
+  return li;
+}
+
+function render() {
+  document.querySelectorAll("#toggle [data-view]").forEach((btn) => {
+    btn.classList.toggle("on", btn.dataset.view === view);
+  });
+  paintCrumbs();
+  const ul = $("list");
+  const actions = $("actions");
+  ul.innerHTML = "";
+  actions.innerHTML = "";
+  actions.hidden = true;
+  const now = playingName();
+
+  if (view === "artists" && !artist) {
+    const list = artists();
+    let letter = "";
+    list.forEach((a) => {
+      const L = (a.name.charAt(0) || "#").toUpperCase();
+      if (L !== letter) {
+        letter = L;
+        const h = document.createElement("li");
+        h.className = "letter";
+        h.textContent = L;
+        ul.appendChild(h);
+      }
+      const li = document.createElement("li");
+      li.innerHTML = "<span class='name'>" + esc(a.name) + "</span><span class='size'>" + a.count + "</span>";
+      li.onclick = () => { artist = a.name; album = ""; render(); };
+      ul.appendChild(li);
+    });
+    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No artists match</span></li>";
+  } else if ((view === "artists" && artist && !album) || (view === "albums" && !album)) {
+    const list = albums(view === "artists" ? artist : "");
+    list.forEach((a) => {
+      const li = document.createElement("li");
+      li.innerHTML = "<div class='grow'><div class='name'>" + esc(a.album) + "</div><div class='sub'>" + esc(a.artist) + "</div></div><span class='size'>" + a.count + "</span>";
+      li.onclick = () => { artist = a.artist; album = a.album; render(); };
+      ul.appendChild(li);
+    });
+    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No albums match</span></li>";
+  } else if (view === "playlists" && !playlistId) {
+    actions.hidden = false;
+    const mk = document.createElement("button");
+    mk.className = "primary";
+    mk.textContent = "New playlist";
+    mk.onclick = async () => {
+      const name = prompt("Playlist name");
+      if (!name) return;
+      const st = await api("/api/playlists", { action: "create", name: name });
+      if (!st.ok) { $("err").textContent = st.error || "could not create"; return; }
+      last.playlists = st.playlists || [];
+      render();
+    };
+    actions.appendChild(mk);
+    const s = q();
+    playlists().filter((p) => !s || p.name.toLowerCase().indexOf(s) >= 0).forEach((p) => {
+      const li = document.createElement("li");
+      li.innerHTML = "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
+      const play = document.createElement("button");
+      play.textContent = "Play";
+      play.onclick = (e) => { e.stopPropagation(); api("/api/play", { playlist: p.id }).then(() => tick()); };
+      const del = document.createElement("button");
+      del.textContent = "Delete";
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm("Delete playlist “" + p.name + "”?")) return;
+        const st = await api("/api/playlists", { action: "delete", id: p.id });
+        last.playlists = st.playlists || [];
+        render();
+      };
+      li.appendChild(play);
+      li.appendChild(del);
+      li.onclick = () => { playlistId = p.id; render(); };
+      ul.appendChild(li);
+    });
+    if (!playlists().length) ul.innerHTML = "<li class='empty'><span class='name'>No playlists yet — tap New playlist</span></li>";
+  } else if (view === "playlists" && playlistId) {
+    const pl = playlists().filter((p) => p.id === playlistId)[0];
+    if (!pl) { playlistId = ""; render(); return; }
+    const list = playlistTracks(pl);
+    actions.hidden = false;
+    const play = document.createElement("button");
+    play.className = "primary";
+    play.textContent = "Play all";
+    play.disabled = !list.length;
+    play.onclick = () => playList(list);
+    const rename = document.createElement("button");
+    rename.className = "ghost";
+    rename.textContent = "Rename";
+    rename.onclick = async () => {
+      const name = prompt("Playlist name", pl.name);
+      if (!name) return;
+      const st = await api("/api/playlists", { action: "rename", id: pl.id, name: name });
+      last.playlists = st.playlists || [];
+      render();
+    };
+    actions.appendChild(play);
+    actions.appendChild(rename);
+    list.forEach((t) => {
+      ul.appendChild(rowTrack(t, {
+        order: list,
+        noAdd: true,
+        remove: async (name, ev) => {
+          ev.stopPropagation();
+          const st = await api("/api/playlists", { action: "remove", id: pl.id, name: name });
+          last.playlists = st.playlists || [];
+          render();
+        }
+      }));
+    });
+    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>Empty playlist — add tracks from Artists, Albums, or Tracks</span></li>";
+  } else {
+    const list = viewTracks();
+    if (list.length && (artist || album)) {
+      actions.hidden = false;
+      const play = document.createElement("button");
+      play.className = "primary";
+      play.textContent = "Play all";
+      play.onclick = () => playList(list);
+      actions.appendChild(play);
+    }
+    list.forEach((t) => ul.appendChild(rowTrack(t, { order: list })));
+    if (!tracks().length) ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above</span></li>";
+    else if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No tracks match</span></li>";
+  }
 }
 
 const drop = $("drop");
@@ -88,7 +391,6 @@ const drop = $("drop");
 ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
 drop.addEventListener("drop", e => upload(e.dataTransfer.files));
 $("file").addEventListener("change", e => upload(e.target.files));
-$("filter").addEventListener("input", () => renderTracks());
 
 async function upload(files) {
   const list = Array.from(files || []);
@@ -105,54 +407,33 @@ async function upload(files) {
       $("upstat").textContent = "Rejected: " + err.message;
     }
   }
-  tick();
+  tick(true);
 }
 
-function renderTracks() {
-  const q = ($("filter").value || "").trim().toLowerCase();
-  const playing = (last.player && last.player.name) || "";
-  const ul = $("tracks");
-  ul.innerHTML = "";
-  const tracks = (last.tracks || []).filter((t) => {
-    if (!q) return true;
-    return (t.name || "").toLowerCase().indexOf(q) >= 0 || titleOf(t.name).toLowerCase().indexOf(q) >= 0;
-  });
-  tracks.forEach((t) => {
-    const li = document.createElement("li");
-    if (t.name === playing) li.className = "on";
-    li.innerHTML = "<span class='name'>" + esc(titleOf(t.name)) + "</span><span class='size'>" + pretty(t.size) + "</span>";
-    const b = document.createElement("button");
-    b.textContent = "Delete";
-    b.onclick = (e) => delName(t.name, e);
-    li.appendChild(b);
-    li.onclick = () => playName(t.name);
-    ul.appendChild(li);
-  });
-  if (!(last.tracks || []).length) {
-    ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above</span></li>";
-  } else if (!tracks.length) {
-    ul.innerHTML = "<li class='empty'><span class='name'>No tracks match that filter</span></li>";
-  }
-}
-
-async function tick() {
+async function tick(force) {
   try {
     const st = await (await fetch("/api/status")).json();
     const lib = await (await fetch("/api/library")).json();
     last = Object.assign({}, st, lib);
     const p = st.player || {};
-    $("hostline").textContent = p.name ? ("Now · " + titleOf(p.name)) : ((st.model || "SHR-S2") + " · TOSLINK");
+    $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.model || "SHR-S2") + " · TOSLINK");
     const d = lib.disk || st.disk || {};
     const n = (lib.tracks || []).length;
-    $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free";
+    const scan = lib.scanning ? " · reading tags" : "";
+    $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
     $("err").textContent = "";
-    renderTracks();
+    const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
+    const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",");
+    if (force || next !== stamp) {
+      stamp = next;
+      render();
+    }
   } catch (e) {
     $("err").textContent = "Host is not answering";
   }
 }
-tick();
-setInterval(tick, 2500);
+tick(true);
+setInterval(() => tick(false), 2500);
 </script>
 </body>
 </html>

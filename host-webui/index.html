@@ -360,7 +360,7 @@ function renderQueue(st) {
     const li = document.createElement("li");
     li.innerHTML =
       "<span class='idx'>" + (i + 1) + "</span>" +
-      "<span class='name'>" + esc(titleOf(t.name)) + "</span>";
+      "<span class='name'>" + esc(t.title || titleOf(t.name)) + "</span>";
     li.onclick = () => playName(t.name);
     ul.appendChild(li);
   });
