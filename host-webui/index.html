@@ -29,7 +29,7 @@
         <span class="badge" id="state">Idle</span>
       </div>
       <div class="viz-wrap" id="vizwrap">
-        <canvas id="viz" aria-label="Playback visualizer"></canvas>
+        <canvas id="viz" aria-label="Playback visualizer and waveform"></canvas>
         <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
       </div>
       <div class="now" id="now">Nothing playing</div>
@@ -124,15 +124,20 @@ function unlockAudio() {
   if (!AC) return false;
   if (!tap.ctx) {
     tap.ctx = new AC();
-    tap.analyser = tap.ctx.createAnalyser();
-    tap.analyser.fftSize = 512;
-    tap.analyser.smoothingTimeConstant = 0.68;
-    tap.freq = new Uint8Array(tap.analyser.frequencyBinCount);
+    tap.fft = tap.ctx.createAnalyser();
+    tap.fft.fftSize = 1024;
+    tap.fft.smoothingTimeConstant = 0.68;
+    tap.freq = new Uint8Array(tap.fft.frequencyBinCount);
+    tap.waveN = tap.ctx.createAnalyser();
+    tap.waveN.fftSize = 2048;
+    tap.waveN.smoothingTimeConstant = 0.12;
+    tap.wave = new Float32Array(tap.waveN.fftSize);
     tap.gain = tap.ctx.createGain();
     tap.gain.gain.value = 0;
     tap.src = tap.ctx.createMediaElementSource(tap.audio);
-    tap.src.connect(tap.analyser);
-    tap.analyser.connect(tap.gain);
+    tap.src.connect(tap.fft);
+    tap.src.connect(tap.waveN);
+    tap.fft.connect(tap.gain);
     tap.gain.connect(tap.ctx.destination);
   }
   if (tap.ctx.state === "suspended") tap.ctx.resume();
@@ -230,8 +235,8 @@ function sizeViz() {
 }
 
 function fftLevels(nBars) {
-  if (!tap.analyser || !tap.freq || !tap.ok) return null;
-  tap.analyser.getByteFrequencyData(tap.freq);
+  if (!tap.fft || !tap.freq || !tap.ok) return null;
+  tap.fft.getByteFrequencyData(tap.freq);
   const n = tap.freq.length;
   let energy = 0;
   const out = new Float32Array(nBars);
@@ -289,6 +294,7 @@ function drawViz(ts) {
     energy += viz.bars[i];
   }
   energy = Math.max(0.06, Math.min(1, energy / bars * (live ? 2.2 : 1)));
+  const split = Math.floor(h * 0.58);
   const gap = Math.max(1, w * 0.006);
   const bw = (w - gap * (bars + 1)) / bars;
 
@@ -301,20 +307,21 @@ function drawViz(ts) {
   ctx.fillRect(0, 0, w, h);
 
   const cx = w / 2;
-  const cy = h * 0.58;
-  const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, h * 0.7);
+  const cy = split * 0.62;
+  const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, split * 0.9);
   rg.addColorStop(0, "rgba(224,122,58," + (0.18 + energy * 0.35) + ")");
-  rg.addColorStop(0.35, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
+  rg.addColorStop(0.4, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
   rg.addColorStop(1, "rgba(7,6,10,0)");
   ctx.fillStyle = rg;
-  ctx.fillRect(0, 0, w, h);
+  ctx.fillRect(0, 0, w, split);
 
+  const barH = split - h * 0.06;
   for (let i = 0; i < bars; i++) {
     const amp = Math.max(0.04, viz.bars[i]);
-    const bh = Math.max(h * 0.04, amp * h * 0.9);
+    const bh = Math.max(h * 0.03, amp * barH);
     const x = gap + i * (bw + gap);
-    const y = h - bh - h * 0.08;
-    const bar = ctx.createLinearGradient(0, y, 0, h);
+    const y = split - bh - 4;
+    const bar = ctx.createLinearGradient(0, y, 0, split);
     bar.addColorStop(0, "#f3c07a");
     bar.addColorStop(0.35, "#e07a3a");
     bar.addColorStop(1, "#5c1010");
@@ -324,10 +331,58 @@ function drawViz(ts) {
   }
   ctx.globalAlpha = 1;
 
+  ctx.fillStyle = "rgba(196,92,38,0.35)";
+  ctx.fillRect(0, split, w, Math.max(1, h * 0.004));
+  drawWave(ctx, w, h, split, t, live);
+}
+
+function waveSamples() {
+  if (!tap.waveN || !tap.wave || !tap.ok) return null;
+  tap.waveN.getFloatTimeDomainData(tap.wave);
+  return tap.wave;
+}
+
+function drawWave(ctx, w, h, split, clock, live) {
+  const top = split + h * 0.04;
+  const bot = h - h * 0.04;
+  const mid = (top + bot) / 2;
+  const amp = (bot - top) / 2 * 0.92;
+  const data = (live && viz.mode === "play") ? waveSamples() : null;
   ctx.beginPath();
-  ctx.arc(cx, cy, 6 + energy * 10, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(243,230,200," + (0.35 + energy * 0.45) + ")";
+  ctx.moveTo(0, mid);
+  if (data && data.length) {
+    const n = data.length;
+    const step = Math.max(1, Math.floor(n / w));
+    for (let x = 0; x < w; x++) {
+      const i = Math.min(n - 1, x * step);
+      const y = mid + data[i] * amp;
+      ctx.lineTo(x, y);
+    }
+  } else if (viz.mode === "pause" && tap.wave && tap.wave.length) {
+    const n = tap.wave.length;
+    const step = Math.max(1, Math.floor(n / w));
+    for (let x = 0; x < w; x++) {
+      const i = Math.min(n - 1, x * step);
+      const y = mid + tap.wave[i] * amp * 0.7;
+      ctx.lineTo(x, y);
+    }
+  } else {
+    for (let x = 0; x < w; x++) {
+      const y = mid + Math.sin(x * 0.04 + clock * 1.4) * amp * 0.08;
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.lineTo(w, mid);
+  ctx.closePath();
+  const fill = ctx.createLinearGradient(0, top, 0, bot);
+  fill.addColorStop(0, "rgba(224,122,58,0.22)");
+  fill.addColorStop(0.5, "rgba(243,192,122,0.16)");
+  fill.addColorStop(1, "rgba(155,28,28,0.18)");
+  ctx.fillStyle = fill;
   ctx.fill();
+  ctx.strokeStyle = "rgba(243,230,200,0.85)";
+  ctx.lineWidth = Math.max(1.2, w / 420);
+  ctx.stroke();
 }
 
 function startViz() {

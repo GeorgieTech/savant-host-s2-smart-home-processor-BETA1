@@ -158,7 +158,7 @@ body.is-playing {
 canvas#viz {
   display: block;
   width: 100%;
-  height: 196px;
+  height: 248px;
   cursor: pointer;
 }
 audio#tap {
@@ -596,7 +596,7 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
 @media (min-width: 800px) {
   .page { max-width: 860px; }
   .controls { grid-template-columns: repeat(4, 1fr); }
-  canvas#viz { height: 240px; }
+  canvas#viz { height: 300px; }
 }
 
 @media (max-width: 420px) {
