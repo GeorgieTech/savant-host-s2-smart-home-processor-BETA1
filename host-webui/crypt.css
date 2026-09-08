@@ -250,6 +250,30 @@ body.is-playing {
 .clock-legend .play::before { background: #e07a3a; }
 .clock-legend #clk-lock.lock { color: var(--ok); }
 .clock-legend #clk-lock.loose { color: var(--ember); }
+.clock-legend #clk-lock.warm { color: #c4a574; }
+.clock-meter {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.clock-meter .k {
+  display: block;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 650;
+}
+.clock-meter .v {
+  display: block;
+  color: var(--bone);
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+}
 .clock-note {
   margin: 8px 0 0;
   color: var(--muted);

@@ -11,6 +11,7 @@ import time
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "/data/music")
 PULSE_SINK = os.environ.get("PULSE_SINK", "@DEFAULT_SINK@")
 FFMPEG_LOG = os.environ.get("FFMPEG_LOG", "/tmp/crypt-ffmpeg.log")
+PROGRESS_FILE = os.environ.get("PROGRESS_FILE", "/tmp/crypt-ff.progress")
 CLOCK_FILE = os.environ.get("CLOCK_FILE", "/data/crypt/clock.json")
 # DualLite is happier at 48 kHz; Pulse resamples onto the 96 kHz S/PDIF sink.
 RATE = os.environ.get("CRYPT_RATE", "48000")
@@ -24,6 +25,15 @@ try:
     CLOCK_PAD_MS = max(0, min(400, int(os.environ.get("CRYPT_CLOCK_PAD_MS", "270"))))
 except ValueError:
     CLOCK_PAD_MS = 270
+# AFC-style PLL: fast capture, then hold. Pulse latency is a noisy 10 MHz analog.
+try:
+    PLL_CAPTURE = max(0.05, min(0.5, float(os.environ.get("CRYPT_PLL_CAPTURE", "0.28"))))
+except ValueError:
+    PLL_CAPTURE = 0.28
+try:
+    PLL_HOLD = max(0.01, min(0.2, float(os.environ.get("CRYPT_PLL_HOLD", "0.045"))))
+except ValueError:
+    PLL_HOLD = 0.045
 EQ_Q = 1.1
 EQ_BANDS = (
     ("lowshelf", 32, "32"),
@@ -69,7 +79,9 @@ def ffmpeg_eq_filter(gains):
 
 def _cmd(args):
     try:
-        return subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True).strip()
+        return subprocess.check_output(
+            args, stderr=subprocess.DEVNULL, text=True, timeout=1.2
+        ).strip()
     except Exception:
         return ""
 
@@ -79,6 +91,109 @@ def _paplay_ms():
         return int(LATENCY_MS)
     except (TypeError, ValueError):
         return 90
+
+
+def _word_rate():
+    try:
+        rate = int(RATE)
+    except (TypeError, ValueError):
+        return 48000
+    return rate if rate > 0 else 48000
+
+
+def _samples(sec, rate=None):
+    rate = int(rate or _word_rate())
+    return int(round(max(0.0, float(sec or 0.0)) * rate))
+
+
+def new_pll_state(lat_ms, buf_ms=0.0, sink_ms=0.0):
+    """Disciplined path-delay estimator. Rubidium analog: hold a stable reference."""
+    return {
+        "lat_ms": float(lat_ms or 0.0),
+        "buf_ms": float(buf_ms or 0.0),
+        "sink_ms": float(sink_ms or 0.0),
+        "jitter_ms": 0.0,
+        "n": 0,
+        "locked": False,
+        "accepted": True,
+    }
+
+
+def discipline_latency(state, sample, capture=PLL_CAPTURE, hold=PLL_HOLD):
+    """
+    4th-gen AFC analog: do not follow instantaneous Pulse jitter.
+    Capture quickly, then oven-hold. Reject outliers once locked.
+    """
+    buf = float(sample.get("buffer_ms") or 0.0)
+    sink = float(sample.get("sink_ms") or 0.0)
+    total = float(sample.get("latency_ms") or (buf + sink))
+    if total < 20 or total > 1200:
+        state["accepted"] = False
+        return state
+    err = total - state["lat_ms"]
+    jitter = state["jitter_ms"] or 0.0
+    locked = bool(state["locked"])
+    gate = max(18.0, jitter * 3.0 if jitter > 0.4 else 48.0)
+    if locked and abs(err) > gate:
+        state["accepted"] = False
+        state["jitter_ms"] = jitter * 0.92 + abs(err) * 0.08
+        return state
+    alpha = hold if locked else capture
+    state["lat_ms"] = state["lat_ms"] * (1.0 - alpha) + total * alpha
+    state["buf_ms"] = buf
+    state["sink_ms"] = sink
+    state["n"] = int(state.get("n") or 0) + 1
+    state["jitter_ms"] = jitter * 0.78 + abs(err) * 0.22
+    if (not locked) and state["n"] >= 6 and state["jitter_ms"] < 8.0:
+        state["locked"] = True
+    elif locked and state["jitter_ms"] > 22.0:
+        state["locked"] = False
+        state["n"] = 3
+    state["accepted"] = True
+    return state
+
+
+def discipline_decoder(corr, mono_s, ref_s, alpha=0.12, snap_s=0.35):
+    """Steer the monotonic oscillator toward ffmpeg out_time without steps."""
+    if ref_s is None:
+        return corr
+    err = float(ref_s) - (float(mono_s) + float(corr or 0.0))
+    if abs(err) > snap_s:
+        return corr + err
+    return (corr or 0.0) + err * alpha
+
+
+def _read_out_time_s(path=PROGRESS_FILE):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > 2048:
+                fh.seek(size - 2048)
+            data = fh.read()
+    except OSError:
+        return None
+    us = None
+    ms = None
+    for raw in data.decode("ascii", "ignore").splitlines():
+        if raw.startswith("out_time_us="):
+            try:
+                val = int(raw.split("=", 1)[1].strip())
+            except ValueError:
+                continue
+            if val >= 0:
+                us = val
+        elif raw.startswith("out_time_ms="):
+            try:
+                val = int(raw.split("=", 1)[1].strip())
+            except ValueError:
+                continue
+            if val >= 0:
+                ms = val
+    if us is not None:
+        return us / 1000000.0
+    if ms is not None:
+        return ms / 1000.0
+    return None
 
 
 def _usec_field(line, prefix):
@@ -145,7 +260,12 @@ def _load_clock_file():
         sink = float(data.get("sink_ms") or 0)
         if lat < 60 or lat > 1200 or buf < 40:
             return None
-        return {"latency_ms": lat, "buffer_ms": buf, "sink_ms": sink}
+        return {
+            "latency_ms": lat,
+            "buffer_ms": buf,
+            "sink_ms": sink,
+            "jitter_ms": float(data.get("jitter_ms") or 0),
+        }
     except Exception:
         return None
 
@@ -188,6 +308,7 @@ class HostPlayer(object):
         self._set_mute(False)
         threading.Thread(target=self._watch, daemon=True).start()
         threading.Thread(target=self._vol_loop, name="vol-fade", daemon=True).start()
+        threading.Thread(target=self._clock_loop, name="time-clock", daemon=True).start()
 
     def snapshot(self):
         with self.lock:
@@ -240,6 +361,7 @@ class HostPlayer(object):
         if self.paused:
             return True
         self.hold = self._position_locked()
+        self._play_corr = 0.0
         self._set_mute(True)
         try:
             os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
@@ -264,6 +386,7 @@ class HostPlayer(object):
                 self.error = str(exc)
                 return False
             self.t0 = time.monotonic() - (self.hold - self.offset)
+            self._play_corr = 0.0
             self.paused = False
             self.error = ""
             self._set_mute(False)
@@ -388,72 +511,115 @@ class HostPlayer(object):
         saved = _load_clock_file()
         default = float(_paplay_ms() + CLOCK_PAD_MS)
         if saved:
-            self._lat_ms = saved["latency_ms"]
-            self._buf_ms = saved.get("buffer_ms") or 0.0
-            self._sink_ms = saved.get("sink_ms") or 0.0
+            lat = saved["latency_ms"]
+            buf = saved.get("buffer_ms") or 0.0
+            sink = saved.get("sink_ms") or 0.0
+            jitter = saved.get("jitter_ms") or 0.0
         else:
-            self._lat_ms = default
-            self._buf_ms = float(_paplay_ms())
-            self._sink_ms = float(CLOCK_PAD_MS)
+            lat = default
+            buf = float(_paplay_ms())
+            sink = float(CLOCK_PAD_MS)
+            jitter = 0.0
+        self._pll = new_pll_state(lat, buf, sink)
+        self._pll["jitter_ms"] = float(jitter or 0.0)
+        self._pll["locked"] = bool(saved)
+        self._lat_ms = self._pll["lat_ms"]
+        self._buf_ms = self._pll["buf_ms"]
+        self._sink_ms = self._pll["sink_ms"]
         self._clock_on = False
         self._clock_saved = 0.0
+        self._play_corr = 0.0
+        self._ppm = 0.0
+        self._ref_age = 0.0
+
+    def _mono_locked(self):
+        if self.paused or not self._alive_locked():
+            return self.hold
+        return self.offset + (time.monotonic() - self.t0)
+
+    def _position_locked(self):
+        pos = self._mono_locked() + (self._play_corr or 0.0)
+        if self.duration > 0:
+            pos = min(pos, self.duration)
+        return max(0.0, pos)
 
     def _clock_locked(self, playback):
         playback = max(0.0, playback or 0.0)
-        lat_s = max(0.0, (self._lat_ms or 0.0) / 1000.0)
+        lat_s = max(0.0, (self._pll["lat_ms"] or 0.0) / 1000.0)
         heard = max(self.offset if self.media else 0.0, playback - lat_s)
         if self.duration > 0:
             heard = min(heard, self.duration)
             playback = min(playback, self.duration)
         heard = max(0.0, heard)
-        offset_ms = max(0, int(round((playback - heard) * 1000.0)))
-        try:
-            rate = int(RATE)
-        except (TypeError, ValueError):
-            rate = 48000
+        offset_ms = max(0.0, (playback - heard) * 1000.0)
+        rate = _word_rate()
+        jitter = float(self._pll.get("jitter_ms") or 0.0)
+        locked = bool(
+            self._clock_on
+            and self._pll.get("locked")
+            and self._alive_locked()
+            and not self.paused
+        )
+        if not self.media:
+            phase = "idle"
+        elif self.paused or not self._alive_locked():
+            phase = "frozen"
+        elif not self._clock_on:
+            phase = "warmup"
+        elif not self._pll.get("locked"):
+            phase = "locking"
+        else:
+            phase = "locked"
         return {
-            "heard": round(heard, 3),
-            "playback": round(playback, 3),
-            "offset_ms": offset_ms,
-            "latency_ms": int(round(self._lat_ms or 0.0)),
-            "buffer_ms": int(round(self._buf_ms or 0.0)),
-            "sink_ms": int(round(self._sink_ms or 0.0)),
+            "heard": round(heard, 6),
+            "playback": round(playback, 6),
+            "heard_samples": _samples(heard, rate),
+            "playback_samples": _samples(playback, rate),
+            "offset_ms": int(round(offset_ms)),
+            "latency_ms": round(self._pll["lat_ms"], 2),
+            "buffer_ms": round(self._pll["buf_ms"], 2),
+            "sink_ms": round(self._pll["sink_ms"], 2),
             "paplay_ms": _paplay_ms(),
-            "drift_ms": int(round((self._lat_ms or 0.0) - float(_paplay_ms()))),
-            "locked": bool(self._clock_on and self._alive_locked() and not self.paused),
+            "drift_ms": int(round(self._pll["lat_ms"] - float(_paplay_ms()))),
+            "jitter_ms": round(jitter, 3),
+            "ppm": round(self._ppm, 3),
+            "locked": locked,
+            "phase": phase,
             "rate": rate,
         }
 
     def _apply_latency_sample(self, sample):
-        buf = float(sample.get("buffer_ms") or 0.0)
-        sink = float(sample.get("sink_ms") or 0.0)
-        total = float(sample.get("latency_ms") or (buf + sink))
-        if total < 20 or total > 1200:
+        discipline_latency(self._pll, sample)
+        self._lat_ms = self._pll["lat_ms"]
+        self._buf_ms = self._pll["buf_ms"]
+        self._sink_ms = self._pll["sink_ms"]
+        if not self._pll.get("accepted"):
             return
-        if not self._clock_on:
-            self._lat_ms = total
-        else:
-            self._lat_ms = (self._lat_ms * 0.62) + (total * 0.38)
-        self._buf_ms = buf
-        self._sink_ms = sink
         self._clock_on = True
         now = time.monotonic()
-        if self._buf_ms >= 40 and now - self._clock_saved >= 8.0:
+        if self._pll["buf_ms"] >= 40 and now - self._clock_saved >= 8.0:
             self._clock_saved = now
             _save_clock_file({
-                "latency_ms": round(self._lat_ms, 1),
-                "buffer_ms": round(self._buf_ms, 1),
-                "sink_ms": round(self._sink_ms, 1),
+                "latency_ms": round(self._pll["lat_ms"], 2),
+                "buffer_ms": round(self._pll["buf_ms"], 2),
+                "sink_ms": round(self._pll["sink_ms"], 2),
+                "jitter_ms": round(self._pll["jitter_ms"], 3),
             })
 
-    def _position_locked(self):
+    def _steer_decoder_locked(self):
         if self.paused or not self._alive_locked():
-            pos = self.hold
-        else:
-            pos = self.offset + (time.monotonic() - self.t0)
-        if self.duration > 0:
-            pos = min(pos, self.duration)
-        return round(max(0.0, pos), 3)
+            return
+        mono = self.offset + (time.monotonic() - self.t0)
+        ref = _read_out_time_s()
+        if ref is None:
+            return
+        self._play_corr = discipline_decoder(self._play_corr, mono, self.offset + ref)
+        wall = max(0.25, time.monotonic() - self.t0)
+        if wall >= 1.5 and ref > 0.2:
+            self._ppm = ((ref / wall) - 1.0) * 1e6
+            if self._ppm > 5000 or self._ppm < -5000:
+                self._ppm = 0.0
+        self._ref_age = time.monotonic()
 
     def _probe(self, path):
         out = _cmd(
@@ -483,6 +649,9 @@ class HostPlayer(object):
         self.t0 = time.monotonic()
         self.generation += 1
         self._set_mute(False)
+        self._play_corr = 0.0
+        self._ppm = 0.0
+        self._clock_on = False
         if proc is None:
             return
         try:
@@ -503,12 +672,17 @@ class HostPlayer(object):
             open(FFMPEG_LOG, "w").close()
         except OSError:
             pass
+        try:
+            open(PROGRESS_FILE, "w").close()
+        except OSError:
+            pass
         cmd = (
             "ffmpeg -nostdin -hide_banner -nostats -loglevel error "
-            "-fflags +nobuffer %s-i %s -ac 2 -ar %s %s-f s16le - 2>>%s "
+            "-progress %s -fflags +nobuffer %s-i %s -ac 2 -ar %s %s-f s16le - 2>>%s "
             "| paplay --device=%s --raw --format=s16le --rate=%s --channels=2 "
             "--latency-msec=%s --process-time-msec=20 --client-name=CRYPT"
             % (
+                shlex.quote(PROGRESS_FILE),
                 ss,
                 shlex.quote(path),
                 shlex.quote(RATE),
@@ -535,6 +709,8 @@ class HostPlayer(object):
         self.hold = start
         self.t0 = time.monotonic()
         self.paused = False
+        self._play_corr = 0.0
+        self._ppm = 0.0
         self._clock_on = False
         self.error = ""
         return True
@@ -545,7 +721,6 @@ class HostPlayer(object):
             time.sleep(0.4)
             ended = False
             gen = 0
-            playing = False
             with self.lock:
                 if self.proc is not None and self.proc.poll() is not None and not self.paused:
                     if self.generation != last:
@@ -554,8 +729,6 @@ class HostPlayer(object):
                         self.proc = None
                         self.hold = self.duration or self._position_locked()
                         self._clock_on = False
-                else:
-                    playing = bool(self._alive_locked() and not self.paused)
             if ended:
                 last = gen
                 if self.on_end:
@@ -563,12 +736,23 @@ class HostPlayer(object):
                         self.on_end()
                     except Exception:
                         pass
-                continue
+
+    def _clock_loop(self):
+        while True:
+            playing = False
+            locked = False
+            with self.lock:
+                playing = bool(self._alive_locked() and not self.paused)
+                locked = bool(self._pll.get("locked") and self._clock_on)
             if not playing:
-                continue
-            sample = _read_crypt_latency()
-            if not sample:
+                time.sleep(0.4)
                 continue
             with self.lock:
                 if self._alive_locked() and not self.paused:
-                    self._apply_latency_sample(sample)
+                    self._steer_decoder_locked()
+            sample = _read_crypt_latency()
+            if sample:
+                with self.lock:
+                    if self._alive_locked() and not self.paused:
+                        self._apply_latency_sample(sample)
+            time.sleep(0.22 if not locked else 1.0)

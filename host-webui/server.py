@@ -403,6 +403,22 @@ class CryptApp(object):
             "disk": _disk(),
         }
 
+    def clock(self):
+        snap = self.player.snapshot()
+        return {
+            "ok": True,
+            "player": {
+                "playing": snap.get("playing"),
+                "paused": snap.get("paused"),
+                "name": snap.get("name") or "",
+                "position": snap.get("position"),
+                "playback": snap.get("playback"),
+                "duration": snap.get("duration"),
+                "clock": snap.get("clock") or {},
+            },
+            "volume": self.player.volume(),
+        }
+
     def eq_state(self):
         eq = clamp_eq(self.player.snapshot().get("eq"))
         return {
@@ -603,6 +619,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/status":
                 self._send(200, APP.status())
+                return
+            if raw_path == "/api/clock":
+                self._send(200, APP.clock())
                 return
             if raw_path == "/api/library":
                 APP.refresh()
