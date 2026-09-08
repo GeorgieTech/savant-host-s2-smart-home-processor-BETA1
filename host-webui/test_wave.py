@@ -73,5 +73,40 @@ class AnalyzeBandsTests(unittest.TestCase):
             os.unlink(path)
 
 
+class BeatGridTests(unittest.TestCase):
+    def test_impulse_train_is_120_bpm(self):
+        rate = 80.0
+        lows = []
+        for i in range(int(rate * 12)):
+            lows.append(1.0 if i % 40 == 4 else 0.04)
+        grid = cryptwave.beat_grid(lows, rate)
+        self.assertGreater(grid["bpm"], 116)
+        self.assertLess(grid["bpm"], 124)
+        self.assertEqual(grid["bar"], 4)
+        self.assertLess(abs(grid["beat0"] - (4 / rate)), 0.04)
+
+    def test_flat_envelope_has_no_grid(self):
+        grid = cryptwave.beat_grid([0.2] * 400, 80)
+        self.assertEqual(grid["bpm"], 0.0)
+
+    def test_analyze_kicks_near_120(self):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            chunks = []
+            for _ in range(16):
+                chunks.append((70, 0.06, 0.85))
+                chunks.append((70, 0.44, 0.0))
+            _tone_wav(path, chunks)
+            data = cryptwave._analyze(path)
+            self.assertIsNotNone(data)
+            self.assertIn("grid", data)
+            bpm = data["grid"]["bpm"]
+            self.assertGreater(bpm, 112)
+            self.assertLess(bpm, 128)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
