@@ -14,7 +14,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
+from player import HostPlayer, MUSIC_DIR, EQ_BANDS, EQ_PRESETS, EQ_Q, clamp_eq, eq_region
 from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
 from lyrics import LYRICS
@@ -22,43 +22,16 @@ from lyrics import LYRICS
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
 EQ_FILE = os.environ.get("EQ_FILE", "/data/crypt/eq.json")
-EQ_PRESETS = (
-    {
-        "id": "flat",
-        "name": "Flat",
-        "blurb": "No boost or cut. A level starting point.",
-        "gains": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    },
-    {
-        "id": "harman",
-        "name": "Harman",
-        "blurb": "Harman loudspeaker target (Olive 2013 in-room preference): bass shelf below ~100 Hz, then a gentle downward tilt through the treble. 10-band fit, 1 kHz at 0 dB.",
-        "gains": [6.5, 6.0, 4.0, 1.5, 0.5, 0, -0.5, -2.5, -4.0, -6.0],
-    },
-    {
-        "id": "bk1974",
-        "name": "B&K 1974",
-        "blurb": "Brüel & Kjær 1974 hi-fi room curve: fairly level bass into the lower mids, then a slow roll-off toward the top. 10-band fit, 1 kHz at 0 dB.",
-        "gains": [2.0, 2.0, 1.8, 1.0, 0.5, 0, -0.8, -1.6, -2.5, -4.0],
-    },
-    {
-        "id": "hifi",
-        "name": "Optimum HiFi",
-        "blurb": "Classic “optimum hi-fi” house curve: mild bass lift, a presence dip around 2–4 kHz, and easier treble. 10-band fit, 1 kHz at 0 dB.",
-        "gains": [3.0, 2.5, 1.5, 0.5, 0.2, 0, -1.5, -2.0, -1.0, -2.5],
-    },
-    {
-        "id": "nad",
-        "name": "NAD / Bluesound",
-        "blurb": "NAD / Bluesound house target: punch around 30–60 Hz, less deep rumble than a full bass shelf, warmer and steeper highs than Harman. 10-band fit, 1 kHz at 0 dB.",
-        "gains": [5.5, 4.0, 2.5, 1.0, 0.3, 0, -1.2, -3.0, -5.0, -7.5],
-    },
-)
 
 
 def _eq_bands():
     return [
-        {"type": kind, "freq": freq, "label": label}
+        {
+            "type": kind,
+            "freq": freq,
+            "label": label,
+            "region": eq_region(freq),
+        }
         for kind, freq, label in EQ_BANDS
     ]
 
@@ -391,6 +364,8 @@ class CryptApp(object):
             "preset": _match_preset(eq),
             "bands": _eq_bands(),
             "presets": [dict(p) for p in EQ_PRESETS],
+            "q": EQ_Q,
+            "spacing": "1/3 octave",
         }
 
     def set_eq(self, gains=None, preset=None):

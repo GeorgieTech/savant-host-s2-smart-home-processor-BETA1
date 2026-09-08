@@ -13,14 +13,14 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/crypt.css">
 </head>
-<body>
+<body class="eq-page">
 <div class="app">
   <header class="topbar">
     <div class="brand">
       <h1>CRYPT</h1>
       <div class="sub">EQ</div>
     </div>
-    <div class="hostline" id="hostline">TOSLINK · 10-band</div>
+    <div class="hostline" id="hostline">TOSLINK · 31-band</div>
   </header>
   <main class="page">
     <section class="card">
@@ -28,10 +28,20 @@
         <h2>Equalizer</h2>
         <span class="badge" id="state">Idle</span>
       </div>
-      <p class="hint">Ten bands run on the S2 in ffmpeg, then out TOSLINK. There is no in-browser playback. Sliders apply when you release them so the DualLite does not restart the decoder on every drag.</p>
+      <p class="hint" id="hint">31 ISO 1/3-octave bands, 20 Hz–20 kHz, constant-Q 4.32. Narrow enough to cut a room mode or mains hum without dragging the neighbors. ffmpeg on the S2, then TOSLINK. Sliders apply when you release them. Tap a gain to zero that band.</p>
       <div class="eq-presets" id="presets"></div>
       <p class="eq-note" id="note"></p>
-      <div class="eq-board" id="board"></div>
+      <div class="eq-legend" id="legend">
+        <span class="bass">Bass</span>
+        <span class="lowmid">Low mid</span>
+        <span class="mid">Mid</span>
+        <span class="presence">Presence</span>
+        <span class="air">Air</span>
+      </div>
+      <div class="eq-console">
+        <div class="eq-scale" aria-hidden="true"><span>+12</span><span>0</span><span>−12</span></div>
+        <div class="eq-board" id="board"></div>
+      </div>
       <div class="err" id="err"></div>
       <div class="okline" id="ok"></div>
     </section>
@@ -45,27 +55,9 @@
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const EQ_BANDS = [
-  { freq: 32, label: "32", type: "lowshelf" },
-  { freq: 64, label: "64", type: "peaking" },
-  { freq: 125, label: "125", type: "peaking" },
-  { freq: 250, label: "250", type: "peaking" },
-  { freq: 500, label: "500", type: "peaking" },
-  { freq: 1000, label: "1k", type: "peaking" },
-  { freq: 2000, label: "2k", type: "peaking" },
-  { freq: 4000, label: "4k", type: "peaking" },
-  { freq: 8000, label: "8k", type: "peaking" },
-  { freq: 16000, label: "16k", type: "highshelf" }
-];
-const EQ_PRESETS = [
-  { id: "flat", name: "Flat", blurb: "No boost or cut. A level starting point.", gains: [0,0,0,0,0,0,0,0,0,0] },
-  { id: "harman", name: "Harman", blurb: "Harman loudspeaker target (Olive 2013 in-room preference): bass shelf below ~100 Hz, then a gentle downward tilt through the treble. 10-band fit, 1 kHz at 0 dB.", gains: [6.5, 6.0, 4.0, 1.5, 0.5, 0, -0.5, -2.5, -4.0, -6.0] },
-  { id: "bk1974", name: "B&K 1974", blurb: "Brüel & Kjær 1974 hi-fi room curve: fairly level bass into the lower mids, then a slow roll-off toward the top. 10-band fit, 1 kHz at 0 dB.", gains: [2.0, 2.0, 1.8, 1.0, 0.5, 0, -0.8, -1.6, -2.5, -4.0] },
-  { id: "hifi", name: "Optimum HiFi", blurb: "Classic “optimum hi-fi” house curve: mild bass lift, a presence dip around 2–4 kHz, and easier treble. 10-band fit, 1 kHz at 0 dB.", gains: [3.0, 2.5, 1.5, 0.5, 0.2, 0, -1.5, -2.0, -1.0, -2.5] },
-  { id: "nad", name: "NAD / Bluesound", blurb: "NAD / Bluesound house target: punch around 30–60 Hz, less deep rumble than a full bass shelf, warmer and steeper highs than Harman. 10-band fit, 1 kHz at 0 dB.", gains: [5.5, 4.0, 2.5, 1.0, 0.3, 0, -1.2, -3.0, -5.0, -7.5] }
-];
-
-let gains = EQ_BANDS.map(() => 0);
+let EQ_BANDS = [];
+let EQ_PRESETS = [];
+let gains = [];
 let eqTimer = null;
 let lastPlayer = {};
 
@@ -83,7 +75,7 @@ function matchPreset(vals) {
   for (let p = 0; p < EQ_PRESETS.length; p++) {
     let ok = true;
     for (let i = 0; i < EQ_BANDS.length; i++) {
-      if (Math.abs((vals[i] || 0) - EQ_PRESETS[p].gains[i]) > 0.35) { ok = false; break; }
+      if (Math.abs((vals[i] || 0) - (EQ_PRESETS[p].gains[i] || 0)) > 0.35) { ok = false; break; }
     }
     if (ok) return EQ_PRESETS[p].id;
   }
@@ -119,7 +111,7 @@ function paintPresets() {
   const id = matchPreset(gains);
   wrap.querySelectorAll("button").forEach((btn) => btn.classList.toggle("on", btn.dataset.preset === id));
   const preset = EQ_PRESETS.filter((p) => p.id === id)[0];
-  $("note").textContent = preset ? preset.blurb : "Custom — a band was moved off the selected curve.";
+  $("note").textContent = preset ? preset.blurb : "Custom — a band was moved off the selected curve. Tap a gain readout to zero that band.";
 }
 
 function paintBoard() {
@@ -135,10 +127,17 @@ function paintBoard() {
   board.innerHTML = "";
   EQ_BANDS.forEach((band, i) => {
     const col = document.createElement("div");
-    col.className = "eq-band";
-    const gain = document.createElement("span");
+    col.className = "eq-band " + (band.region || "");
+    const gain = document.createElement("button");
+    gain.type = "button";
     gain.className = "gain";
     gain.textContent = fmtGain(gains[i]);
+    gain.title = "Zero " + band.label;
+    gain.onclick = () => {
+      const next = gains.slice();
+      next[i] = 0;
+      applyGains(next, true);
+    };
     const wrap = document.createElement("div");
     wrap.className = "eq-slider";
     const input = document.createElement("input");
@@ -198,7 +197,7 @@ async function tick() {
     const st = await (await fetch("/api/status")).json();
     const p = st.player || {};
     lastPlayer = p;
-    $("hostline").textContent = p.name ? ("Now · TOSLINK") : "TOSLINK · 10-band";
+    $("hostline").textContent = p.name ? "Now · TOSLINK · 31-band" : "TOSLINK · 31-band";
     const badge = $("state");
     const playing = !!p.playing;
     const paused = !!p.paused;
@@ -212,11 +211,14 @@ async function tick() {
 async function boot() {
   try {
     const st = await api("/api/eq");
-    if (st.eq) applyGains(st.eq, false);
-    else { paintBoard(); paintPresets(); }
+    EQ_BANDS = st.bands || [];
+    EQ_PRESETS = st.presets || [];
+    if (st.q) {
+      $("hint").textContent = "31 ISO 1/3-octave bands, 20 Hz–20 kHz, constant-Q " + Number(st.q).toFixed(2) + ". Narrow enough to cut a room mode or mains hum without dragging the neighbors. ffmpeg on the S2, then TOSLINK. Sliders apply when you release them. Tap a gain to zero that band.";
+    }
+    if (!EQ_BANDS.length) throw new Error("no bands");
+    applyGains(st.eq, false);
   } catch (e) {
-    paintBoard();
-    paintPresets();
     $("err").textContent = "Host is not answering";
   }
   tick();

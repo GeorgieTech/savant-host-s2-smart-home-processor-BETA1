@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """TOSLINK playback on the SHR-S2: ffmpeg stereo WAV piped to paplay/Pulse."""
 import json
+import math
 import os
 import shlex
 import signal
@@ -34,35 +35,119 @@ try:
     PLL_HOLD = max(0.01, min(0.2, float(os.environ.get("CRYPT_PLL_HOLD", "0.045"))))
 except ValueError:
     PLL_HOLD = 0.045
-EQ_Q = 1.1
-EQ_BANDS = (
-    ("lowshelf", 32, "32"),
-    ("peaking", 64, "64"),
-    ("peaking", 125, "125"),
-    ("peaking", 250, "250"),
-    ("peaking", 500, "500"),
-    ("peaking", 1000, "1k"),
-    ("peaking", 2000, "2k"),
-    ("peaking", 4000, "4k"),
-    ("peaking", 8000, "8k"),
-    ("highshelf", 16000, "16k"),
+# Constant-Q 1/3-octave graphic EQ (ISO 266 / IEC 61260). Q = 1 / (2^(1/6)-2^(-1/6)).
+EQ_Q = 4.318
+EQ_FREQS = (
+    20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500,
+    630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000,
+    10000, 12500, 16000, 20000,
 )
+EQ_LABELS = (
+    "20", "25", "31.5", "40", "50", "63", "80", "100", "125", "160", "200",
+    "250", "315", "400", "500", "630", "800", "1k", "1.25k", "1.6k", "2k",
+    "2.5k", "3.15k", "4k", "5k", "6.3k", "8k", "10k", "12.5k", "16k", "20k",
+)
+EQ_BANDS = tuple(("peaking", freq, label) for freq, label in zip(EQ_FREQS, EQ_LABELS))
+# V1.1.4 and earlier: 10-band Gigawatt-style shelf/peak/shelf.
+EQ_LEGACY_FREQS = (32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
+
+
+def eq_region(freq):
+    if freq < 90:
+        return "bass"
+    if freq < 350:
+        return "lowmid"
+    if freq < 1400:
+        return "mid"
+    if freq < 5500:
+        return "presence"
+    return "air"
+
+
+def _clamp_gain(value):
+    try:
+        return max(-12.0, min(12.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _interp_log(freqs, gains, freq):
+    if freq <= freqs[0]:
+        return gains[0]
+    if freq >= freqs[-1]:
+        return gains[-1]
+    target = math.log(freq)
+    for i in range(len(freqs) - 1):
+        lo, hi = freqs[i], freqs[i + 1]
+        if lo <= freq <= hi:
+            span = math.log(hi) - math.log(lo)
+            if span <= 0:
+                return gains[i]
+            t = (target - math.log(lo)) / span
+            return gains[i] + t * (gains[i + 1] - gains[i])
+    return 0.0
+
+
+def expand_eq(values, src_freqs=None):
+    """Map a saved curve onto the 31 ISO bands. 10-band files are interpolated."""
+    n = len(EQ_BANDS)
+    if not isinstance(values, (list, tuple)):
+        return [0.0] * n
+    src = [_clamp_gain(v) for v in values]
+    if len(src) == n:
+        return src
+    freqs = src_freqs
+    if freqs is None:
+        if len(src) == len(EQ_LEGACY_FREQS):
+            freqs = EQ_LEGACY_FREQS
+        else:
+            out = [0.0] * n
+            for i in range(min(n, len(src))):
+                out[i] = src[i]
+            return out
+    return [_clamp_gain(round(_interp_log(freqs, src, freq) * 2.0) / 2.0) for freq in EQ_FREQS]
 
 
 def clamp_eq(values):
-    out = [0.0] * len(EQ_BANDS)
-    if not isinstance(values, (list, tuple)):
-        return out
-    for i in range(min(len(EQ_BANDS), len(values))):
-        try:
-            out[i] = max(-12.0, min(12.0, float(values[i])))
-        except (TypeError, ValueError):
-            out[i] = 0.0
-    return out
+    return expand_eq(values)
+
+
+EQ_PRESETS = (
+    {
+        "id": "flat",
+        "name": "Flat",
+        "blurb": "No boost or cut. Use this, then notch a single 1/3-octave band to kill a room mode or mains hum.",
+        "gains": [0.0] * 31,
+    },
+    {
+        "id": "harman",
+        "name": "Harman",
+        "blurb": "Harman loudspeaker target (Olive 2013 in-room): bass shelf below ~100 Hz, then a gentle downward tilt through the treble. 31-band 1/3-octave fit, 1 kHz at 0 dB.",
+        "gains": [6.5, 6.5, 6.5, 6.5, 6.0, 6.0, 5.5, 4.5, 4.0, 3.0, 2.5, 1.5, 1.0, 1.0, 0.5, 0.5, 0.0, 0.0, 0.0, -0.5, -0.5, -1.0, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.5, -6.0, -6.0],
+    },
+    {
+        "id": "bk1974",
+        "name": "B&K 1974",
+        "blurb": "Brüel & Kjær 1974 hi-fi room curve: fairly level bass into the lower mids, then a slow roll-off toward the top. 31-band 1/3-octave fit, 1 kHz at 0 dB.",
+        "gains": [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0, -0.5, -0.5, -1.0, -1.0, -1.5, -1.5, -2.0, -2.0, -2.5, -3.0, -3.5, -4.0, -4.0],
+    },
+    {
+        "id": "hifi",
+        "name": "Optimum HiFi",
+        "blurb": "Classic “optimum hi-fi” house curve: mild bass lift, a presence dip around 2–4 kHz, and easier treble. 31-band 1/3-octave fit, 1 kHz at 0 dB.",
+        "gains": [3.0, 3.0, 3.0, 3.0, 2.5, 2.5, 2.0, 2.0, 1.5, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, -0.5, -1.0, -1.5, -1.5, -2.0, -2.0, -1.5, -1.5, -1.0, -1.5, -2.0, -2.5, -2.5],
+    },
+    {
+        "id": "nad",
+        "name": "NAD / Bluesound",
+        "blurb": "NAD / Bluesound house target: punch around 30–60 Hz, less deep rumble than a full bass shelf, warmer and steeper highs than Harman. 31-band 1/3-octave fit, 1 kHz at 0 dB.",
+        "gains": [3.0, 4.5, 5.5, 5.5, 5.0, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0, 1.0, 0.5, 0.5, 0.0, 0.0, 0.0, -0.5, -1.0, -1.0, -2.0, -2.5, -3.0, -3.5, -4.5, -5.0, -6.0, -6.5, -7.5, -8.0],
+    },
+)
 
 
 def ffmpeg_eq_filter(gains):
-    """Match BETA2: Q 1.1, lowshelf / peaking / highshelf on TOSLINK."""
+    """31-band 1/3-octave peaking EQ on TOSLINK. Zero bands are omitted."""
     gains = clamp_eq(gains)
     parts = []
     for (kind, freq, _label), gain in zip(EQ_BANDS, gains):
