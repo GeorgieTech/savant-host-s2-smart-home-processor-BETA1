@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CRYPT">
-<title>CRYPT — Music</title>
+<title>CRYPT — Playing</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -23,43 +23,54 @@
     <div class="hostline" id="hostline">Connecting…</div>
   </header>
   <main class="page">
-    <section class="card">
-      <h2>Now playing</h2>
-      <div class="now" id="now">Nothing queued</div>
+    <section class="card nowcard">
+      <div class="section-head">
+        <h2>What’s playing</h2>
+        <span class="badge" id="state">Idle</span>
+      </div>
+      <div class="viz-wrap" id="vizwrap">
+        <canvas id="viz" aria-label="Playback visualizer"></canvas>
+      </div>
+      <div class="now" id="now">Nothing playing</div>
       <div class="meta" id="meta">0:00 / 0:00</div>
       <div class="bar" id="seek"><span id="fill"></span></div>
-      <div class="controls">
-        <button onclick="api('/api/prev')">Prev</button>
-        <button class="primary" id="playbtn" onclick="toggle()">Play</button>
-        <button onclick="api('/api/stop')">Stop</button>
-        <button onclick="api('/api/next')">Next</button>
+      <div class="transport">
+        <button class="icon" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
+        <button class="playbig primary" id="playbtn" onclick="toggle()">Play</button>
+        <button class="icon" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
+      </div>
+      <div class="row center">
+        <button class="ghost" onclick="api('/api/stop')">Stop</button>
       </div>
       <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100" onchange="setVol(this.value)"></div>
       <div class="err" id="err"></div>
     </section>
     <section class="card">
-      <h2>Upload</h2>
-      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this host and play out TOSLINK.</p>
-      <div class="drop" id="drop">
-        Drop files here, or
-        <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
-        <div id="upstat"></div>
+      <div class="section-head">
+        <h2>Up next</h2>
+        <span class="meta tight" id="qmeta"></span>
       </div>
-    </section>
-    <section class="card">
-      <h2>Library</h2>
-      <div class="meta" id="disk"></div>
-      <ul class="tracks" id="tracks"></ul>
+      <ol class="queue" id="queue"></ol>
+      <a class="morelink" id="qmore" href="/library" hidden></a>
     </section>
   </main>
   <nav class="tabbar">
-    <a class="on" href="/">Music</a>
+    <a class="on" href="/">Playing</a>
+    <a href="/library">Library</a>
     <a href="/controls">Relays</a>
   </nav>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
 let last = {};
+let viz = {
+  seed: 1,
+  clock: 0,
+  lastTs: 0,
+  raf: 0,
+  vol: 1,
+  mode: "idle"
+};
 
 function fmt(sec) {
   sec = Math.max(0, sec || 0);
@@ -67,15 +78,22 @@ function fmt(sec) {
   const s = Math.floor(sec % 60);
   return m + ":" + String(s).padStart(2, "0");
 }
-function pretty(n) {
-  if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
-  if (n > 1e6) return (n/1e6).toFixed(1) + " MB";
-  return Math.round(n/1024) + " KB";
-}
 function esc(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
   }[c]));
+}
+function titleOf(name) {
+  return String(name || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+}
+function hashName(s) {
+  let h = 2166136261;
+  const t = String(s || "crypt");
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 1;
 }
 async function api(path, body) {
   const opt = body === undefined ? { method: "POST" } : {
@@ -95,13 +113,10 @@ async function toggle() {
   tick();
 }
 async function playName(name) { await api("/api/play", { name }); tick(); }
-async function delName(name, ev) {
-  ev.stopPropagation();
-  if (!confirm("Delete “" + name + "” from the library?")) return;
-  await api("/api/delete", { name });
-  tick();
+function setVol(n) {
+  viz.vol = Math.max(0, Math.min(100, Number(n))) / 100;
+  api("/api/volume", { n: Number(n) });
 }
-function setVol(n) { api("/api/volume", { n: Number(n) }); }
 
 $("seek").addEventListener("click", (e) => {
   const p = last.player || {};
@@ -110,66 +125,163 @@ $("seek").addEventListener("click", (e) => {
   const t = ((e.clientX - r.left) / r.width) * p.duration;
   api("/api/seek", { seconds: t }).then(tick);
 });
+$("viz").addEventListener("click", () => toggle());
 
-const drop = $("drop");
-["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
-["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
-drop.addEventListener("drop", e => upload(e.dataTransfer.files));
-$("file").addEventListener("change", e => upload(e.target.files));
+function sizeViz() {
+  const c = $("viz");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = c.clientWidth || 320;
+  const h = c.clientHeight || 200;
+  const tw = Math.max(1, Math.floor(w * dpr));
+  const th = Math.max(1, Math.floor(h * dpr));
+  if (c.width !== tw) c.width = tw;
+  if (c.height !== th) c.height = th;
+}
 
-async function upload(files) {
-  const list = Array.from(files || []);
-  for (const f of list) {
-    $("upstat").textContent = "Uploading " + f.name + "…";
-    const fd = new FormData();
-    fd.append("file", f, f.name);
-    try {
-      const r = await fetch("/api/upload", { method: "POST", body: fd });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "failed");
-      $("upstat").textContent = "Saved " + j.name;
-    } catch (err) {
-      $("upstat").textContent = "Rejected: " + err.message;
-    }
+function drawViz(ts) {
+  viz.raf = requestAnimationFrame(drawViz);
+  const c = $("viz");
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  sizeViz();
+  const w = c.width;
+  const h = c.height;
+  const dt = viz.lastTs ? Math.min(0.05, (ts - viz.lastTs) / 1000) : 0.016;
+  viz.lastTs = ts;
+  if (viz.mode === "play") viz.clock += dt;
+  else if (viz.mode === "idle") viz.clock += dt * 0.18;
+
+  const energy = viz.mode === "play" ? (0.45 + 0.55 * viz.vol)
+    : viz.mode === "pause" ? 0.22
+    : 0.08;
+  const bars = 48;
+  const mid = Math.floor(bars / 2);
+  const gap = Math.max(1, w * 0.006);
+  const bw = (w - gap * (bars + 1)) / bars;
+  const seed = viz.seed;
+  const t = viz.clock;
+
+  ctx.clearRect(0, 0, w, h);
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "rgba(155,28,28,0.16)");
+  g.addColorStop(0.55, "rgba(7,6,10,0.08)");
+  g.addColorStop(1, "rgba(7,6,10,0.92)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  const cx = w / 2;
+  const cy = h * 0.58;
+  const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, h * 0.7);
+  rg.addColorStop(0, "rgba(224,122,58," + (0.18 + energy * 0.35) + ")");
+  rg.addColorStop(0.35, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
+  rg.addColorStop(1, "rgba(7,6,10,0)");
+  ctx.fillStyle = rg;
+  ctx.fillRect(0, 0, w, h);
+
+  for (let i = 0; i < bars; i++) {
+    const d = Math.abs(i - mid) / mid;
+    const bass = 1 - d * 0.72;
+    const n1 = 0.5 + 0.5 * Math.sin(t * (1.15 + (seed % 5) * 0.13) + i * 0.37);
+    const n2 = 0.5 + 0.5 * Math.sin(t * (2.4 + (i % 7) * 0.11) + seed * 0.01 + i * 0.19);
+    const n3 = 0.5 + 0.5 * Math.sin(t * 0.47 + i * 0.08 + seed);
+    let amp = (0.22 + 0.55 * n1 * n2 + 0.23 * n3) * bass * energy;
+    if (viz.mode === "pause") amp *= 0.85;
+    const bh = Math.max(h * 0.04, amp * h * 0.86);
+    const x = gap + i * (bw + gap);
+    const y = h - bh - h * 0.08;
+    const bar = ctx.createLinearGradient(0, y, 0, h);
+    bar.addColorStop(0, "#f3c07a");
+    bar.addColorStop(0.35, "#e07a3a");
+    bar.addColorStop(1, "#5c1010");
+    ctx.fillStyle = bar;
+    ctx.globalAlpha = 0.55 + energy * 0.45;
+    ctx.fillRect(x, y, Math.max(1, bw), bh);
   }
-  tick();
+  ctx.globalAlpha = 1;
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6 + energy * 10, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(243,230,200," + (0.35 + energy * 0.45) + ")";
+  ctx.fill();
+}
+
+function startViz() {
+  if (viz.raf) return;
+  viz.lastTs = 0;
+  viz.raf = requestAnimationFrame(drawViz);
+}
+function stopViz() {
+  if (viz.raf) cancelAnimationFrame(viz.raf);
+  viz.raf = 0;
+}
+
+function renderQueue(st) {
+  const ul = $("queue");
+  ul.innerHTML = "";
+  const items = st.queue || [];
+  const total = st.queue_total || 0;
+  $("qmeta").textContent = total ? Math.min(items.length, 5) + " of " + total : "";
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.innerHTML = (st.count || 0)
+      ? "<span class='name'>End of the queue</span>"
+      : "<span class='name'>Nothing queued — add tracks in Library</span>";
+    ul.appendChild(li);
+    $("qmore").hidden = true;
+    return;
+  }
+  items.slice(0, 5).forEach((t, i) => {
+    const li = document.createElement("li");
+    li.innerHTML =
+      "<span class='idx'>" + (i + 1) + "</span>" +
+      "<span class='name'>" + esc(titleOf(t.name)) + "</span>";
+    li.onclick = () => playName(t.name);
+    ul.appendChild(li);
+  });
+  if (total > items.length) {
+    $("qmore").hidden = false;
+    $("qmore").textContent = (total - items.length) + " more in Library →";
+  } else {
+    $("qmore").hidden = true;
+  }
 }
 
 async function tick() {
   try {
     const st = await (await fetch("/api/status")).json();
-    const lib = await (await fetch("/api/library")).json();
-    last = Object.assign({}, st, lib);
+    last = st;
     const p = st.player || {};
+    const playing = !!p.playing;
+    const paused = !!p.paused;
+    viz.seed = hashName(p.name || st.host || "crypt");
+    viz.mode = playing ? "play" : paused ? "pause" : "idle";
+    viz.vol = ((st.volume == null ? 100 : st.volume) / 100);
     $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
-    $("now").textContent = p.name || "Nothing queued";
+    $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
     $("meta").textContent = fmt(p.position) + " / " + fmt(p.duration);
     $("fill").style.width = (p.duration ? (100 * p.position / p.duration) : 0) + "%";
-    $("playbtn").textContent = p.playing ? "Pause" : "Play";
+    $("playbtn").textContent = playing ? "Pause" : "Play";
     $("err").textContent = p.error || "";
     $("vol").value = st.volume == null ? 100 : st.volume;
-    const d = lib.disk || st.disk || {};
-    $("disk").textContent = pretty(d.used || 0) + " used · " + pretty(d.free || 0) + " free";
-    const ul = $("tracks");
-    ul.innerHTML = "";
-    (lib.tracks || []).forEach((t) => {
-      const li = document.createElement("li");
-      if (t.name === p.name) li.className = "on";
-      li.innerHTML = "<span class='name'>" + esc(t.name) + "</span><span class='size'>" + pretty(t.size) + "</span>";
-      const b = document.createElement("button");
-      b.textContent = "Delete";
-      b.onclick = (e) => delName(t.name, e);
-      li.appendChild(b);
-      li.onclick = () => playName(t.name);
-      ul.appendChild(li);
-    });
-    if (!(lib.tracks || []).length) {
-      ul.innerHTML = "<li><span class='name'>Library is empty</span></li>";
-    }
+    const badge = $("state");
+    badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
+    badge.textContent = playing ? "Playing" : paused ? "Paused" : "Idle";
+    $("vizwrap").classList.toggle("live", playing);
+    document.body.classList.toggle("is-playing", playing);
+    renderQueue(st);
   } catch (e) {
     $("err").textContent = "Host is not answering";
+    viz.mode = "idle";
   }
 }
+
+window.addEventListener("resize", sizeViz);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopViz();
+  else startViz();
+});
+startViz();
 tick();
 setInterval(tick, 1000);
 </script>

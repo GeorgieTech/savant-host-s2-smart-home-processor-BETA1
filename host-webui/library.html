@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07060a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CRYPT">
+<title>CRYPT — Library</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/crypt.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1>CRYPT</h1>
+      <div class="sub">Library</div>
+    </div>
+    <div class="hostline" id="hostline">Connecting…</div>
+  </header>
+  <main class="page">
+    <section class="card">
+      <h2>Upload</h2>
+      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this host and play out TOSLINK.</p>
+      <div class="drop" id="drop">
+        Drop files here, or
+        <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
+        <div id="upstat"></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="section-head">
+        <h2>Library</h2>
+        <span class="meta tight" id="disk"></span>
+      </div>
+      <input class="search" id="filter" type="search" placeholder="Filter tracks" autocomplete="off">
+      <ul class="tracks" id="tracks"></ul>
+      <div class="err" id="err"></div>
+    </section>
+  </main>
+  <nav class="tabbar">
+    <a href="/">Playing</a>
+    <a class="on" href="/library">Library</a>
+    <a href="/controls">Relays</a>
+  </nav>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let last = { tracks: [], player: {} };
+
+function pretty(n) {
+  if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
+  if (n > 1e6) return (n/1e6).toFixed(1) + " MB";
+  return Math.round(n/1024) + " KB";
+}
+function esc(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
+}
+function titleOf(name) {
+  return String(name || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+}
+async function api(path, body) {
+  const opt = body === undefined ? { method: "POST" } : {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
+  const r = await fetch(path, opt);
+  return r.json();
+}
+async function playName(name) { await api("/api/play", { name }); tick(); }
+async function delName(name, ev) {
+  ev.stopPropagation();
+  if (!confirm("Delete “" + name + "” from the library?")) return;
+  await api("/api/delete", { name });
+  tick();
+}
+
+const drop = $("drop");
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", e => upload(e.dataTransfer.files));
+$("file").addEventListener("change", e => upload(e.target.files));
+$("filter").addEventListener("input", () => renderTracks());
+
+async function upload(files) {
+  const list = Array.from(files || []);
+  for (const f of list) {
+    $("upstat").textContent = "Uploading " + f.name + "…";
+    const fd = new FormData();
+    fd.append("file", f, f.name);
+    try {
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "failed");
+      $("upstat").textContent = "Saved " + j.name;
+    } catch (err) {
+      $("upstat").textContent = "Rejected: " + err.message;
+    }
+  }
+  tick();
+}
+
+function renderTracks() {
+  const q = ($("filter").value || "").trim().toLowerCase();
+  const playing = (last.player && last.player.name) || "";
+  const ul = $("tracks");
+  ul.innerHTML = "";
+  const tracks = (last.tracks || []).filter((t) => {
+    if (!q) return true;
+    return (t.name || "").toLowerCase().indexOf(q) >= 0 || titleOf(t.name).toLowerCase().indexOf(q) >= 0;
+  });
+  tracks.forEach((t) => {
+    const li = document.createElement("li");
+    if (t.name === playing) li.className = "on";
+    li.innerHTML = "<span class='name'>" + esc(titleOf(t.name)) + "</span><span class='size'>" + pretty(t.size) + "</span>";
+    const b = document.createElement("button");
+    b.textContent = "Delete";
+    b.onclick = (e) => delName(t.name, e);
+    li.appendChild(b);
+    li.onclick = () => playName(t.name);
+    ul.appendChild(li);
+  });
+  if (!(last.tracks || []).length) {
+    ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above</span></li>";
+  } else if (!tracks.length) {
+    ul.innerHTML = "<li class='empty'><span class='name'>No tracks match that filter</span></li>";
+  }
+}
+
+async function tick() {
+  try {
+    const st = await (await fetch("/api/status")).json();
+    const lib = await (await fetch("/api/library")).json();
+    last = Object.assign({}, st, lib);
+    const p = st.player || {};
+    $("hostline").textContent = p.name ? ("Now · " + titleOf(p.name)) : ((st.model || "SHR-S2") + " · TOSLINK");
+    const d = lib.disk || st.disk || {};
+    const n = (lib.tracks || []).length;
+    $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free";
+    $("err").textContent = "";
+    renderTracks();
+  } catch (e) {
+    $("err").textContent = "Host is not answering";
+  }
+}
+tick();
+setInterval(tick, 2500);
+</script>
+</body>
+</html>

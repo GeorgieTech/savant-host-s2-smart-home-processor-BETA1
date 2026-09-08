@@ -25,6 +25,8 @@ SAFE_NAME = re.compile(r"[^A-Za-z0-9._+\- ()\[\]]+")
 PAGES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/library": ("library.html", "text/html; charset=utf-8"),
+    "/library.html": ("library.html", "text/html; charset=utf-8"),
     "/controls": ("controls.html", "text/html; charset=utf-8"),
     "/controls.html": ("controls.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
@@ -155,12 +157,30 @@ class CryptApp(object):
             elif self.index >= len(self.tracks):
                 self.index = len(self.tracks) - 1 if self.tracks else -1
 
+    def _upcoming(self, tracks, idx, limit=5):
+        n = len(tracks)
+        if n == 0:
+            return [], 0
+        if idx < 0 or idx >= n:
+            items = [{"name": t["name"], "size": t["size"]} for t in tracks[:limit]]
+            return items, n
+        if n == 1:
+            return [], 0
+        items = []
+        for i in range(1, n):
+            t = tracks[(idx + i) % n]
+            items.append({"name": t["name"], "size": t["size"]})
+            if len(items) >= limit:
+                break
+        return items, n - 1
+
     def status(self):
         self.refresh()
         snap = self.player.snapshot()
         with self.lock:
             tracks = list(self.tracks)
             idx = self.index
+        queue, queue_total = self._upcoming(tracks, idx, 5)
         return {
             "host": socket.gethostname(),
             "model": "SHR-S2-00",
@@ -168,6 +188,8 @@ class CryptApp(object):
             "volume": self.player.volume(),
             "index": idx,
             "count": len(tracks),
+            "queue": queue,
+            "queue_total": queue_total,
             "disk": _disk(),
         }
 

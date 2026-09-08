@@ -17,7 +17,7 @@ Savant images on the eMMC are not deleted.
 From the repo root:
 
 ```sh
-scp -O host-webui/index.html host-webui/controls.html host-webui/crypt.css \
+scp -O host-webui/index.html host-webui/library.html host-webui/controls.html host-webui/crypt.css \
   host-webui/server.py host-webui/player.py host-webui/ssc.py \
   host-webui/manifest.webmanifest host-webui/favicon.svg \
   host-webui/icon.png host-webui/apple-touch-icon.png \
@@ -32,7 +32,7 @@ Then on the host, as root via `sudo env bash`:
 ```sh
 mkdir -p /data/www /data/music
 chown RPM:RPM /data/www /data/music
-cp /tmp/index.html /tmp/controls.html /tmp/crypt.css \
+cp /tmp/index.html /tmp/library.html /tmp/controls.html /tmp/crypt.css \
   /tmp/server.py /tmp/player.py /tmp/ssc.py /tmp/pin-hostname.sh \
   /tmp/manifest.webmanifest /tmp/favicon.svg /tmp/icon.png /tmp/apple-touch-icon.png \
   /data/www/
