@@ -17,6 +17,7 @@ from urllib.parse import parse_qs
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
 from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
+from lyrics import LYRICS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
@@ -124,6 +125,8 @@ PAGES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/library": ("library.html", "text/html; charset=utf-8"),
     "/library.html": ("library.html", "text/html; charset=utf-8"),
+    "/karaoke": ("karaoke.html", "text/html; charset=utf-8"),
+    "/karaoke.html": ("karaoke.html", "text/html; charset=utf-8"),
     "/eq": ("eq.html", "text/html; charset=utf-8"),
     "/eq.html": ("eq.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
@@ -366,6 +369,20 @@ class CryptApp(object):
             "volume": self.player.volume(),
         }
 
+    def lyrics(self, name, fetch=False, duration=0):
+        rel = (name or "").strip()
+        snap = self.player.snapshot()
+        if not rel:
+            rel = snap.get("name") or ""
+        dur = 0.0
+        try:
+            dur = float(duration or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        if rel and snap.get("name") == rel:
+            dur = snap.get("duration") or dur
+        return LYRICS.lookup(rel, fetch=bool(fetch), duration=dur)
+
     def eq_state(self):
         eq = clamp_eq(self.player.snapshot().get("eq"))
         return {
@@ -482,6 +499,7 @@ class CryptApp(object):
         if snap.get("name") == rel:
             self.player.stop()
         WAVES.drop_name(rel)
+        LYRICS.drop_name(rel)
         try:
             os.remove(full)
         except OSError:
@@ -570,6 +588,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/clock":
                 self._send(200, APP.clock())
+                return
+            if raw_path == "/api/lyrics":
+                name = _qparam(qs, "name")
+                self._send(200, APP.lyrics(name, fetch=False))
                 return
             if raw_path == "/api/library":
                 APP.refresh()
@@ -690,6 +712,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/volume":
                 ok = APP.player.set_volume(body.get("n"))
                 self._send(200 if ok else 400, {"ok": ok})
+                return
+            if path == "/api/lyrics":
+                name = (body.get("name") or "").strip()
+                self._send(200, APP.lyrics(name, fetch=bool(body.get("fetch")), duration=body.get("duration") or 0))
                 return
             if path == "/api/eq":
                 try:
