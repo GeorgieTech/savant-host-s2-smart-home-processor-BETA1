@@ -13,6 +13,7 @@ import time
 from player import MUSIC_DIR
 
 WAVE_DIR = os.environ.get("CRYPT_WAVES", "/data/crypt/waves")
+WAVE_VER = 2
 RATE = 40
 MAX_FRAMES = 12000
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
@@ -26,11 +27,11 @@ def _lower_nice():
 
 _FILTER = (
     "[0:a]aformat=channel_layouts=mono:sample_fmts=flt,asplit=3[l0][m0][h0];"
-    "[l0]lowpass=f=250,lowpass=f=250,aresample=40,aformat=sample_fmts=flt:channel_layouts=mono[l];"
-    "[m0]highpass=f=250,lowpass=f=4000,aresample=40,aformat=sample_fmts=flt:channel_layouts=mono[m];"
-    "[h0]highpass=f=4000,highpass=f=4000,aresample=40,aformat=sample_fmts=flt:channel_layouts=mono[h];"
+    "[l0]lowpass=f=220,lowpass=f=220,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[l];"
+    "[m0]highpass=f=220,lowpass=f=3500,lowpass=f=3500,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[m];"
+    "[h0]highpass=f=6000,lowpass=f=12000,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono[h];"
     "[l][m][h]join=inputs=3:channel_layout=3.0[a]"
-)
+) % (RATE, RATE, RATE)
 
 
 def _full_path(rel):
@@ -57,27 +58,43 @@ def _stat(full):
 
 
 def _cache_path(rel, size, mtime):
-    key = "%s|%s|%s" % (rel, size, mtime)
+    key = "%s|%s|%s|v%s" % (rel, size, mtime, WAVE_VER)
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:20]
     return os.path.join(WAVE_DIR, digest + ".json")
 
 
-def _scale_band(vals):
+def _smooth(vals, passes=2):
+    if len(vals) < 3:
+        return list(vals)
+    cur = list(vals)
+    for _ in range(passes):
+        nxt = list(cur)
+        for i in range(1, len(cur) - 1):
+            nxt[i] = (cur[i - 1] + cur[i] * 2.0 + cur[i + 1]) * 0.25
+        cur = nxt
+    return cur
+
+
+def _scale_band(vals, percentile=0.96, gamma=0.72, gain=1.0, gate=0.05):
     if not vals:
         return []
     ordered = sorted(vals)
-    idx = int(len(ordered) * 0.97)
+    idx = int(len(ordered) * percentile)
     if idx >= len(ordered):
         idx = len(ordered) - 1
     peak = ordered[idx] or 0.000001
     out = []
     for v in vals:
-        x = v / peak
+        x = (v / peak) * gain
         if x > 1.0:
             x = 1.0
+        if x < gate:
+            x = 0.0
+        elif gate > 0:
+            x = (x - gate) / (1.0 - gate)
         if x < 0.0:
             x = 0.0
-        out.append(int(round((x ** 0.62) * 255.0)))
+        out.append(int(round((x ** gamma) * 255.0)))
     return out
 
 
@@ -132,19 +149,29 @@ def _analyze(full):
     lows, mids, highs = [], [], []
     i = 0
     while i < n:
-        off = i * frame
-        l, m, h = struct.unpack_from("<fff", raw, off)
-        lows.append(abs(l))
-        mids.append(abs(m))
-        highs.append(abs(h))
+        chunk = min(step, n - i)
+        sl = sm = sh = 0.0
+        for k in range(chunk):
+            off = (i + k) * frame
+            l, m, h = struct.unpack_from("<fff", raw, off)
+            sl += l * l
+            sm += m * m
+            sh += h * h
+        den = float(chunk) or 1.0
+        lows.append((sl / den) ** 0.5)
+        mids.append((sm / den) ** 0.5)
+        highs.append((sh / den) ** 0.5)
         i += step
+    lows = _smooth(lows)
+    mids = _smooth(mids)
+    highs = _smooth(highs)
     return {
-        "v": 1,
+        "v": WAVE_VER,
         "rate": RATE / float(step),
         "n": len(lows),
-        "l": _scale_band(lows),
-        "m": _scale_band(mids),
-        "h": _scale_band(highs),
+        "l": _scale_band(lows, 0.96, 0.70, 1.00, 0.04),
+        "m": _scale_band(mids, 0.97, 0.75, 0.92, 0.06),
+        "h": _scale_band(highs, 0.995, 0.92, 0.34, 0.16),
     }
 
 
@@ -176,7 +203,7 @@ class WaveIndex(object):
         try:
             with open(path, "r") as fh:
                 data = json.load(fh)
-            if isinstance(data, dict) and data.get("l") and data.get("m") and data.get("h"):
+            if isinstance(data, dict) and data.get("v") == WAVE_VER and data.get("l") and data.get("m") and data.get("h"):
                 with self.lock:
                     self.mem[path] = data
                 out = dict(data)
@@ -239,7 +266,7 @@ class WaveIndex(object):
             try:
                 with open(path, "r") as fh:
                     data = json.load(fh)
-                if isinstance(data, dict) and data.get("n"):
+                if isinstance(data, dict) and data.get("v") == WAVE_VER and data.get("n"):
                     with self.lock:
                         self.mem[path] = data
                         self.error.pop(rel, None)
