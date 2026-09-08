@@ -965,7 +965,7 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
   left: 0; right: 0; bottom: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-columns: repeat(5, 1fr);
   gap: 0;
   padding: 6px 6px calc(8px + var(--safe-bot));
   background: rgba(10,8,12,0.94);
@@ -1017,4 +1017,73 @@ body.job-busy .tabbar::before {
 @media (max-width: 420px) {
   .brand .sub { display: none; }
   .hostline { max-width: 40vw; }
+  .tabbar a { font-size: 9px; letter-spacing: 0.04em; padding: 10px 0; }
+}
+
+.karaoke-page .kara-card { padding-bottom: 18px; }
+.kara-stage {
+  margin: 12px 0 16px;
+  min-height: 42vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 18px 8px;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 70%, rgba(155,28,28,0.22), transparent 62%),
+    rgba(0,0,0,0.28);
+  border: 1px solid var(--line);
+}
+.kara-prev,
+.kara-next {
+  color: var(--muted);
+  font-size: 16px;
+  min-height: 1.3em;
+  letter-spacing: 0.02em;
+  opacity: 0.72;
+}
+.kara-now {
+  color: var(--bone);
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.25;
+  min-height: 2.4em;
+  letter-spacing: 0.01em;
+}
+.kara-word { color: rgba(243,230,200,0.38); }
+.kara-word.sung { color: #e07a3a; }
+.kara-word.on {
+  color: #f3e6c8;
+  text-shadow: 0 0 18px rgba(224,122,58,0.55);
+}
+.kara-plain { color: rgba(243,230,200,0.4); margin: 0 0 8px; font-size: 18px; }
+.kara-plain.on { color: #f3e6c8; }
+.kara-bar {
+  height: 6px;
+  border-radius: 99px;
+  background: #0e0b0c;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.kara-bar-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--blood), var(--ember-2, #e07a3a));
+}
+.kara-tools {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.kara-actions { margin-top: 8px; }
+@media (min-width: 800px) {
+  .kara-now { font-size: 36px; }
 }
