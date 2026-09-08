@@ -17,7 +17,6 @@ from urllib.parse import parse_qs
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
 from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
-from ssc import SscHub
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
@@ -127,8 +126,6 @@ PAGES = {
     "/library.html": ("library.html", "text/html; charset=utf-8"),
     "/eq": ("eq.html", "text/html; charset=utf-8"),
     "/eq.html": ("eq.html", "text/html; charset=utf-8"),
-    "/controls": ("controls.html", "text/html; charset=utf-8"),
-    "/controls.html": ("controls.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
@@ -258,45 +255,6 @@ def _json_body(handler):
         return {}
 
 
-def _as_bool(val):
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, (int, float)):
-        return bool(val)
-    s = str(val).strip().lower()
-    if s in ("1", "true", "on", "energize", "yes"):
-        return True
-    if s in ("0", "false", "off", "release", "no"):
-        return False
-    raise ValueError("need true or false")
-
-
-def _relay_port(body, relay_count):
-    if body.get("relay") not in (None, ""):
-        n = int(body["relay"])
-        if 1 <= n <= relay_count:
-            return n - 1
-        raise ValueError("relay must be 1-%d" % relay_count)
-    if body.get("port") not in (None, ""):
-        n = int(body["port"])
-        if 0 <= n < relay_count:
-            return n
-        raise ValueError("port must be 0-%d" % (relay_count - 1))
-    raise ValueError("need relay 1-%d or port 0-%d" % (relay_count, relay_count - 1))
-
-
-def _ssc_parts(path):
-    if path == "/api/ssc":
-        return None, None
-    if not path.startswith("/api/ssc/"):
-        return None, None
-    rest = path[len("/api/ssc/"):]
-    bits = [b for b in rest.split("/") if b]
-    if not bits:
-        return None, None
-    return bits[0], (bits[1] if len(bits) > 1 else None)
-
-
 def _playlist_action(body):
     action = str(body.get("action") or "").strip().lower()
     pid = str(body.get("id") or "").strip()
@@ -320,17 +278,6 @@ def _playlist_action(body):
         pl = PLAYLISTS.remove_track(pid, body.get("name"))
         return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
     raise ValueError("need action create/rename/delete/add/remove")
-
-
-def _on_flag(body):
-    if "on" in body:
-        return _as_bool(body.get("on"))
-    action = str(body.get("action") or "").strip().lower()
-    if action in ("on", "energize"):
-        return True
-    if action in ("off", "release"):
-        return False
-    raise ValueError("need on true/false or action on/off")
 
 
 class CryptApp(object):
@@ -580,7 +527,6 @@ class CryptApp(object):
 
 
 APP = CryptApp()
-HUB = SscHub()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -651,19 +597,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _send_media(self, full, head=False)
                 return
-            if raw_path == "/api/ssc":
-                force = "fresh=1" in qs or "force=1" in qs
-                self._send(200, HUB.snapshot_all(force=force))
-                return
-            if raw_path.startswith("/api/ssc/"):
-                devid, action = _ssc_parts(raw_path)
-                if devid and action is None:
-                    force = "fresh=1" in qs or "force=1" in qs
-                    try:
-                        self._send(200, HUB.get(devid).snapshot(force=force))
-                    except KeyError:
-                        self._send(404, {"ok": False, "error": "unknown expander"})
-                    return
             self._send(404, {"error": "not found"})
         except Exception:
             traceback.print_exc()
@@ -778,32 +711,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, payload)
                 return
-            if path in ("/api/ssc/relay", "/api/ssc/relays") or path.startswith("/api/ssc/"):
-                try:
-                    if path == "/api/ssc/relay":
-                        client = HUB.get("ssc14")
-                        action = "relay"
-                    elif path == "/api/ssc/relays":
-                        client = HUB.get("ssc14")
-                        action = "relays"
-                    else:
-                        devid, action = _ssc_parts(path)
-                        client = HUB.get(devid)
-                    if action == "relay":
-                        port = _relay_port(body, client.relay_count)
-                        snap = client.set_relay(port, _on_flag(body))
-                        self._send(200 if snap.get("ok") else 502, snap)
-                        return
-                    if action == "relays":
-                        snap = client.set_all(_on_flag(body))
-                        self._send(200 if snap.get("ok") else 502, snap)
-                        return
-                except KeyError as exc:
-                    self._send(404, {"ok": False, "error": str(exc)})
-                    return
-                except Exception as exc:
-                    self._send(400, {"ok": False, "error": str(exc)})
-                    return
             self._send(404, {"error": "not found"})
         except Exception:
             traceback.print_exc()

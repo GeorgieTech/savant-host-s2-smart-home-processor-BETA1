@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 mkdir -p /data/www /data/music
-cp /tmp/index.html /tmp/library.html /tmp/eq.html /tmp/controls.html /tmp/crypt.css /tmp/server.py /tmp/player.py /tmp/ssc.py /tmp/library.py /tmp/wave.py \
+cp /tmp/index.html /tmp/library.html /tmp/eq.html /tmp/crypt.css /tmp/server.py /tmp/player.py /tmp/library.py /tmp/wave.py \
   /tmp/pin-hostname.sh /tmp/manifest.webmanifest /tmp/favicon.svg /tmp/icon.png /tmp/apple-touch-icon.png /data/www/
-chmod +x /data/www/pin-hostname.sh /data/www/server.py /data/www/player.py /data/www/ssc.py
+chmod +x /data/www/pin-hostname.sh /data/www/server.py /data/www/player.py
 chown -R RPM:RPM /data/www /data/music
 cp /tmp/crypt-web.service /tmp/crypt-pulse.service /tmp/crypt-hostname.service /etc/systemd/system/
 systemctl mask savant-startup-manager.service nginx.service || true
