@@ -401,6 +401,17 @@ button.zoom-btn {
 .wave-legend .lo::before { background: #2f6bff; }
 .wave-legend .mid::before { background: #e08a3a; }
 .wave-legend .hi::before { background: #f3eee6; }
+.wave-legend .beats::before {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: rgba(243,230,200,0.7);
+  box-shadow: 4px 0 0 rgba(243,230,200,0.28);
+}
+.wave-legend .beats.on { color: var(--bone); }
 .wave-over-wrap {
   height: 52px;
   border-radius: 99px;

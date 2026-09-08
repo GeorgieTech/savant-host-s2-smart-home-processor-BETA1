@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Waveform analyzer tests. Needs ffmpeg; no Pulse."""
+import json
 import math
 import os
 import shutil
@@ -81,6 +82,49 @@ class AnalyzeBandsTests(unittest.TestCase):
             self.assertGreater(h8k, 80)
         finally:
             os.unlink(path)
+
+
+class BeatGridTests(unittest.TestCase):
+    def test_impulse_train_is_120_bpm(self):
+        rate = 80.0
+        lows = []
+        for i in range(int(rate * 12)):
+            lows.append(1.0 if i % 40 == 4 else 0.04)
+        grid = cryptwave.beat_grid(lows, rate)
+        self.assertGreater(grid["bpm"], 116)
+        self.assertLess(grid["bpm"], 124)
+        self.assertEqual(grid["bar"], 4)
+        self.assertLess(abs(grid["beat0"] - (4 / rate)), 0.04)
+
+    def test_flat_envelope_has_no_grid(self):
+        grid = cryptwave.beat_grid([0.2] * 400, 80)
+        self.assertEqual(grid["bpm"], 0.0)
+
+
+class DropNameTests(unittest.TestCase):
+    def test_drop_removes_named_cache(self):
+        d = tempfile.mkdtemp(prefix="crypt-waves-")
+        old = cryptwave.WAVE_DIR
+        cryptwave.WAVE_DIR = d
+        try:
+            keep = os.path.join(d, "keep.json")
+            gone = os.path.join(d, "gone.json")
+            with open(keep, "w") as fh:
+                json.dump({"v": 4, "name": "keep.wav", "n": 1}, fh)
+            with open(gone, "w") as fh:
+                json.dump({"v": 4, "name": "gone.wav", "n": 1}, fh)
+            idx = cryptwave.WaveIndex()
+            idx.mem[gone] = {"name": "gone.wav"}
+            idx.mem[keep] = {"name": "keep.wav"}
+            n = idx.drop_name("gone.wav")
+            self.assertGreaterEqual(n, 1)
+            self.assertFalse(os.path.isfile(gone))
+            self.assertTrue(os.path.isfile(keep))
+            self.assertNotIn(gone, idx.mem)
+            self.assertIn(keep, idx.mem)
+        finally:
+            cryptwave.WAVE_DIR = old
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

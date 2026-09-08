@@ -18,7 +18,7 @@
   <header class="topbar">
     <div class="brand">
       <h1>CRYPT</h1>
-      <div class="sub">S2 · V1.1.2</div>
+      <div class="sub">S2 · V1.1.3</div>
     </div>
     <div class="hostline" id="hostline">Connecting…</div>
   </header>
@@ -92,6 +92,7 @@
           <span class="lo">Lows</span>
           <span class="mid">Mids</span>
           <span class="hi">Highs</span>
+          <span class="beats" id="wave-bpm">— BPM</span>
           <span class="zoom-tools">
             <button type="button" class="ghost zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
             <span id="zoom-sec">10s</span>
@@ -365,7 +366,7 @@ function applyClockSample(ck, p, snap) {
   }
   playClock = next;
 }
-let rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0, zoomSec: 10, progress: 0, stage: "", progTimer: 0 };
+let rw = { name: "", n: 0, l: [], m: [], h: [], grid: null, dur: 0, analyzing: false, timer: 0, zoomSec: 10, progress: 0, stage: "", progTimer: 0 };
 const ZOOM_STEPS = [2, 3, 4, 6, 8, 10, 12, 16, 24, 32, 48];
 function zoomWindow() {
   const dur = playClock.duration || 12;
@@ -481,6 +482,9 @@ function loadWave(name) {
     rw.name = "";
     rw.n = 0;
     rw.l = []; rw.m = []; rw.h = [];
+    rw.grid = null;
+    rw.dur = 0;
+    setWaveBpm(null);
     rw.analyzing = false;
     rw.progress = 0;
     showWaveProgress(false);
@@ -492,6 +496,9 @@ function loadWave(name) {
     rw.name = name;
     rw.n = 0;
     rw.l = []; rw.m = []; rw.h = [];
+    rw.grid = null;
+    rw.dur = 0;
+    setWaveBpm(null);
     rw.analyzing = true;
     rw.progress = 0;
     rw.stage = "Starting";
@@ -502,6 +509,10 @@ function loadWave(name) {
     if (data && data.ok && data.l && data.l.length) {
       rw.l = data.l; rw.m = data.m; rw.h = data.h;
       rw.n = data.n || data.l.length;
+      rw.grid = data.grid || null;
+      rw.dur = data.dur || 0;
+      if (rw.dur && !playClock.duration) playClock.duration = rw.dur;
+      setWaveBpm(rw.grid);
       rw.analyzing = false;
       rw.progress = 100;
       showWaveProgress(true, 100, "Complete");
@@ -666,6 +677,61 @@ function peakRange(arr, a, b) {
   }
   return m;
 }
+function setWaveBpm(grid) {
+  const el = $("wave-bpm");
+  if (!el) return;
+  const bpm = grid && grid.bpm;
+  if (!bpm) {
+    el.textContent = "— BPM";
+    el.classList.remove("on");
+    return;
+  }
+  el.textContent = bpm.toFixed(1) + " BPM";
+  el.classList.add("on");
+}
+function drawBeatGrid(ctx, w, h, dpr, t0, t1, dur, onlyDown) {
+  const g = rw.grid;
+  if (!g || !g.bpm || g.bpm < 40 || !dur) return;
+  const period = 60 / g.bpm;
+  if (period <= 0) return;
+  const bar = g.bar || 4;
+  const beat0 = g.beat0 || 0;
+  const span = t1 - t0;
+  if (span <= 0) return;
+  const pxBeat = (period / span) * w;
+  if (pxBeat < 4 && !onlyDown) onlyDown = true;
+  if (pxBeat < 2 && onlyDown) {
+    const pxBar = pxBeat * bar;
+    if (pxBar < 5) return;
+  }
+  let i = Math.ceil((t0 - beat0) / period - 1e-6);
+  if (i < 0) i = 0;
+  const showNum = !onlyDown && span <= 16 && pxBeat >= 18;
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.font = (9 * dpr) + "px Outfit, sans-serif";
+  let drawn = 0;
+  for (; drawn < 240; drawn++, i++) {
+    const t = beat0 + i * period;
+    if (t > t1 + period * 0.05) break;
+    const x = ((t - t0) / span) * w;
+    if (x < -2 || x > w + 2) continue;
+    const down = (i % bar) === 0;
+    if (onlyDown && !down) continue;
+    const x0 = Math.round(x);
+    const wi = down ? Math.max(2, dpr) : Math.max(1, dpr);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(x0, 0, wi + Math.max(1, dpr), h);
+    ctx.fillStyle = down ? "rgba(243,230,200,0.82)" : "rgba(196,160,110,0.48)";
+    ctx.fillRect(x0, 0, wi, h);
+    if (showNum && down) {
+      ctx.fillStyle = "rgba(243,230,200,0.58)";
+      ctx.fillText(String(1 + i / bar), Math.round(x) + 3 * dpr, 3 * dpr);
+    }
+  }
+  ctx.restore();
+}
 function stackCol(ctx, x, bw, mid, maxH, lo, md, hi) {
   lo = Math.max(0, lo || 0);
   md = Math.max(0, md || 0);
@@ -700,7 +766,7 @@ function drawRekord() {
   const over = sizeCanvas("wover");
   if (!scroll || !over) return;
   const pos = nowPos();
-  const dur = playClock.duration || 0;
+  const dur = playClock.duration || rw.dur || 0;
   const playback = nowClock("playback");
   paintScroll(scroll, pos, dur);
   paintOver(over, pos, dur);
@@ -746,6 +812,9 @@ function paintScroll(s, pos, dur) {
       stackCol(ctx, c * bw, bw + 0.5, mid, maxH, rw.l[i] || 0, rw.m[i] || 0, rw.h[i] || 0);
     }
   }
+  const t0 = (dur > 0) ? (left / n) * dur : 0;
+  const t1 = t0 + win;
+  drawBeatGrid(ctx, w, h, s.dpr, t0, t1, dur || win, false);
   const px = w * 0.34;
   const lag = Math.max(0, (nowClock("playback") || 0) - pos);
   if (lag > 0.02 && win > 0) {
@@ -773,6 +842,7 @@ function paintOver(s, pos, dur) {
       const b = Math.floor((x + 1) * srcPerPx);
       stackCol(ctx, x, 1, mid, maxH, peakRange(rw.l, a, b), peakRange(rw.m, a, b), peakRange(rw.h, a, b));
     }
+    drawBeatGrid(ctx, w, h, s.dpr, 0, dur, dur, true);
     if (dur > 0) {
       const win = zoomWindow();
       const x0 = ((pos - win * 0.34) / dur) * w;

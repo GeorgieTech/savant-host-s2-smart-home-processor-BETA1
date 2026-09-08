@@ -14,7 +14,7 @@ import time
 from player import MUSIC_DIR
 
 WAVE_DIR = os.environ.get("CRYPT_WAVES", "/data/crypt/waves")
-WAVE_VER = 3
+WAVE_VER = 4
 # 80 Hz columns. Envelope is computed at 22.05 kHz, so DualLite cost is the
 # filter graph, not this rate. 80 was too heavy when aresample ran on raw PCM.
 RATE = 80
@@ -105,6 +105,127 @@ def _scale_band(vals, percentile=0.96, gamma=0.72, gain=1.0, gate=0.05):
             x = 0.0
         out.append(int(round((x ** gamma) * 255.0)))
     return out
+
+
+def _onset(lows):
+    n = len(lows)
+    out = [0.0] * n
+    for i in range(2, n):
+        d = lows[i] - lows[i - 2]
+        if d > 0.0:
+            out[i] = d
+    return out
+
+
+def _autocorr_lag(onset, min_lag, max_lag):
+    n = len(onset)
+    scores = []
+    best = -1.0
+    best_lag = min_lag
+    for lag in range(min_lag, max_lag + 1):
+        s = 0.0
+        i = lag
+        while i < n:
+            s += onset[i] * onset[i - lag]
+            i += 1
+        scores.append(s)
+        if s > best:
+            best = s
+            best_lag = lag
+    return best_lag, best, scores
+
+
+def _prefer_dance_tempo(lag, rate, scores, min_lag, max_lag):
+    def score_at(period):
+        idx = period - min_lag
+        if 0 <= idx < len(scores):
+            return scores[idx]
+        return 0.0
+
+    bpm = 60.0 * rate / float(lag or 1)
+    half = int(round(lag / 2.0))
+    if bpm < 78 and min_lag <= half <= max_lag:
+        if score_at(half) >= score_at(lag) * 0.62:
+            lag = half
+            bpm = 60.0 * rate / float(lag)
+    dbl = lag * 2
+    if bpm > 168 and min_lag <= dbl <= max_lag:
+        if score_at(dbl) >= score_at(lag) * 0.52:
+            lag = dbl
+            bpm = 60.0 * rate / float(lag)
+    return lag, bpm
+
+
+def _best_phase(onset, lows, lag):
+    best_off = 0
+    best = -1.0
+    n = len(onset)
+    for off in range(max(1, lag)):
+        s = 0.0
+        c = 0
+        k = off
+        while k < n:
+            s += onset[k] + 0.28 * lows[k]
+            c += 1
+            k += lag
+        s /= float(c or 1)
+        if s > best:
+            best = s
+            best_off = off
+    return best_off
+
+
+def _best_downbeat(lows, lag, off, bar=4):
+    best_i = 0
+    best = -1.0
+    n = len(lows)
+    step = lag * bar
+    if step <= 0:
+        return off
+    for i in range(bar):
+        s = 0.0
+        c = 0
+        k = off + i * lag
+        while k < n:
+            s += lows[k]
+            c += 1
+            k += step
+        s /= float(c or 1)
+        if s > best:
+            best = s
+            best_i = i
+    return off + best_i * lag
+
+
+def beat_grid(lows, rate):
+    """Rekordbox-style grid: BPM + first downbeat, from the low envelope."""
+    empty = {"bpm": 0.0, "beat0": 0.0, "bar": 4}
+    n = len(lows or [])
+    rate = float(rate or 0.0)
+    if n < 32 or rate < 8:
+        return empty
+    min_bpm, max_bpm = 70.0, 180.0
+    min_lag = max(4, int(round(60.0 * rate / max_bpm)))
+    max_lag = min(n // 3, int(round(60.0 * rate / min_bpm)))
+    if max_lag <= min_lag + 2:
+        return empty
+    onset = _onset(lows)
+    if sum(onset) <= 1e-9:
+        return empty
+    lag, best, scores = _autocorr_lag(onset, min_lag, max_lag)
+    mean = sum(scores) / float(len(scores) or 1)
+    if best < mean * 1.22:
+        return empty
+    lag, bpm = _prefer_dance_tempo(lag, rate, scores, min_lag, max_lag)
+    if bpm < 55 or bpm > 200:
+        return empty
+    off = _best_phase(onset, lows, lag)
+    down = _best_downbeat(lows, lag, off, 4)
+    return {
+        "bpm": round(bpm, 2),
+        "beat0": round(down / rate, 4),
+        "bar": 4,
+    }
 
 
 def _probe_duration(full):
@@ -266,10 +387,17 @@ def _analyze(full, on_progress=None):
     lows = _smooth(lows, 2)
     mids = _smooth(mids, 2)
     highs = _smooth(highs, 1)
+    wave_rate = RATE / float(step)
+    report(98, "Finding beat grid")
+    grid = beat_grid(lows, wave_rate)
+    if not dur:
+        dur = len(lows) / float(wave_rate or RATE)
     return {
         "v": WAVE_VER,
-        "rate": RATE / float(step),
+        "rate": wave_rate,
         "n": len(lows),
+        "dur": round(dur, 3),
+        "grid": grid,
         "l": _scale_band(lows, *SCALE_LOW),
         "m": _scale_band(mids, *SCALE_MID),
         "h": _scale_band(highs, *SCALE_HIGH),
@@ -353,6 +481,54 @@ class WaveIndex(object):
                 self.queue.append(rel)
             if rel not in self.progress:
                 self.progress[rel] = {"pct": 0, "stage": "Waiting to analyze"}
+
+    def drop_name(self, rel):
+        """Remove cached waveform JSON for this library name (all analyzer versions)."""
+        rel = (rel or "").replace("\\", "/").lstrip("/")
+        if not rel:
+            return 0
+        victims = set()
+        full = _full_path(rel)
+        if full:
+            size, mtime = _stat(full)
+            if size:
+                victims.add(_cache_path(rel, size, mtime))
+        try:
+            listing = os.listdir(WAVE_DIR)
+        except OSError:
+            listing = []
+        for fn in listing:
+            if not fn.endswith(".json"):
+                continue
+            path = os.path.join(WAVE_DIR, fn)
+            try:
+                with open(path, "r") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError, TypeError):
+                continue
+            if isinstance(data, dict) and data.get("name") == rel:
+                victims.add(path)
+        removed = 0
+        for path in victims:
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+            try:
+                os.remove(path + ".tmp")
+            except OSError:
+                pass
+        with self.lock:
+            for path in list(self.mem):
+                data = self.mem.get(path) or {}
+                if path in victims or data.get("name") == rel:
+                    self.mem.pop(path, None)
+            self.error.pop(rel, None)
+            self.progress.pop(rel, None)
+            self.busy.discard(rel)
+            self.queue = [item for item in self.queue if item != rel]
+        return removed
 
     def _mark(self, rel, pct, stage):
         with self.lock:

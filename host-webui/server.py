@@ -478,14 +478,16 @@ class CryptApp(object):
         if not os.path.isfile(full):
             return False
         snap = self.player.snapshot()
-        if snap.get("name") == name.replace("\\", "/"):
+        rel = name.replace("\\", "/").lstrip("/")
+        if snap.get("name") == rel:
             self.player.stop()
+        WAVES.drop_name(rel)
         try:
             os.remove(full)
         except OSError:
             return False
-        CATALOG.drop_name(name.replace("\\", "/"))
-        PLAYLISTS.remove_everywhere(name.replace("\\", "/"))
+        CATALOG.drop_name(rel)
+        PLAYLISTS.remove_everywhere(rel)
         if refresh:
             self.refresh()
         return True
