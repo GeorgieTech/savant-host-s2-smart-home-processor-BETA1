@@ -12,6 +12,11 @@ PULSE_SINK = os.environ.get("PULSE_SINK", "@DEFAULT_SINK@")
 FFMPEG_LOG = os.environ.get("FFMPEG_LOG", "/tmp/crypt-ffmpeg.log")
 # DualLite is happier at 48 kHz; Pulse resamples onto the 96 kHz S/PDIF sink.
 RATE = os.environ.get("CRYPT_RATE", "48000")
+# paplay WAV-on-stdin prebuffers seconds; raw PCM + this latency is the pause window.
+try:
+    LATENCY_MS = str(max(40, min(250, int(os.environ.get("CRYPT_LATENCY_MS", "90")))))
+except ValueError:
+    LATENCY_MS = "90"
 EQ_Q = 1.1
 EQ_BANDS = (
     ("lowshelf", 32, "32"),
@@ -78,7 +83,14 @@ class HostPlayer(object):
         self.generation = 0
         self.eq = [0.0] * len(EQ_BANDS)
         self._eq_timer = None
+        self._vol_lock = threading.Lock()
+        self._vol_cv = threading.Condition(self._vol_lock)
+        self._vol = self._read_sink_volume()
+        self._vol_target = self._vol
+        self._muted = False
+        self._set_mute(False)
         threading.Thread(target=self._watch, daemon=True).start()
+        threading.Thread(target=self._vol_loop, name="vol-fade", daemon=True).start()
 
     def snapshot(self):
         with self.lock:
@@ -127,9 +139,11 @@ class HostPlayer(object):
         if self.paused:
             return True
         self.hold = self._position_locked()
+        self._set_mute(True)
         try:
             os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
         except Exception as exc:
+            self._set_mute(False)
             self.error = str(exc)
             return False
         self.paused = True
@@ -151,6 +165,7 @@ class HostPlayer(object):
             self.t0 = time.monotonic() - (self.hold - self.offset)
             self.paused = False
             self.error = ""
+            self._set_mute(False)
             return True
 
     def stop(self):
@@ -218,19 +233,52 @@ class HostPlayer(object):
         except (TypeError, ValueError):
             return False
         n = max(0, min(100, n))
-        _cmd(["pactl", "set-sink-volume", PULSE_SINK, "%s%%" % n])
+        with self._vol_cv:
+            self._vol_target = n
+            self._vol_cv.notify()
         return True
 
     def volume(self):
+        with self._vol_lock:
+            return int(self._vol_target)
+
+    def _read_sink_volume(self):
         out = _cmd(["pactl", "get-sink-volume", PULSE_SINK])
-        # "Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: ..."
         for part in out.replace("/", " ").split():
             if part.endswith("%"):
                 try:
-                    return int(part[:-1])
+                    return max(0, min(100, int(part[:-1])))
                 except ValueError:
                     pass
         return 100
+
+    def _apply_vol(self, n):
+        _cmd(["pactl", "set-sink-volume", PULSE_SINK, "%s%%" % int(n)])
+
+    def _set_mute(self, mute):
+        _cmd(["pactl", "set-sink-mute", PULSE_SINK, "1" if mute else "0"])
+        self._muted = bool(mute)
+
+    def _vol_loop(self):
+        while True:
+            with self._vol_cv:
+                while self._vol == self._vol_target:
+                    self._vol_cv.wait(timeout=0.4)
+                target = self._vol_target
+                cur = self._vol
+            if cur == target:
+                continue
+            delta = target - cur
+            step = int(round(delta * 0.38))
+            if step == 0:
+                step = 1 if delta > 0 else -1
+            nxt = cur + step
+            if (delta > 0 and nxt > target) or (delta < 0 and nxt < target):
+                nxt = target
+            self._apply_vol(nxt)
+            with self._vol_lock:
+                self._vol = nxt
+            time.sleep(0.018)
 
     def _alive_locked(self):
         return self.proc is not None and self.proc.poll() is None
@@ -271,6 +319,7 @@ class HostPlayer(object):
         self.hold = 0.0
         self.t0 = time.monotonic()
         self.generation += 1
+        self._set_mute(False)
         if proc is None:
             return
         try:
@@ -292,8 +341,10 @@ class HostPlayer(object):
         except OSError:
             pass
         cmd = (
-            "ffmpeg -nostdin -hide_banner -nostats -loglevel error %s-i %s "
-            "-ac 2 -ar %s %s-f wav - 2>>%s | paplay --device=%s"
+            "ffmpeg -nostdin -hide_banner -nostats -loglevel error "
+            "-fflags +nobuffer %s-i %s -ac 2 -ar %s %s-f s16le - 2>>%s "
+            "| paplay --device=%s --raw --format=s16le --rate=%s --channels=2 "
+            "--latency-msec=%s --process-time-msec=20 --client-name=CRYPT"
             % (
                 ss,
                 shlex.quote(path),
@@ -301,6 +352,8 @@ class HostPlayer(object):
                 extra,
                 shlex.quote(FFMPEG_LOG),
                 shlex.quote(PULSE_SINK),
+                shlex.quote(RATE),
+                shlex.quote(str(int(LATENCY_MS))),
             )
         )
         try:

@@ -43,7 +43,7 @@
       <div class="row center">
         <button class="ghost" onclick="api('/api/stop')">Stop</button>
       </div>
-      <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100" onchange="setVol(this.value)"></div>
+      <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100"></div>
       <div class="err" id="err"></div>
     </section>
     <section class="card">
@@ -179,10 +179,32 @@ async function toggle() {
   tick();
 }
 async function playName(name) { unlockAudio(); await api("/api/play", { name }); tick(); }
+let volUser = false;
+let volPending = null;
+let volBusy = false;
 function setVol(n) {
-  viz.vol = Math.max(0, Math.min(100, Number(n))) / 100;
-  api("/api/volume", { n: Number(n) });
+  n = Math.max(0, Math.min(100, Number(n)));
+  viz.vol = n / 100;
+  volPending = n;
+  pumpVol();
 }
+function pumpVol() {
+  if (volBusy || volPending == null) return;
+  const n = volPending;
+  volPending = null;
+  volBusy = true;
+  api("/api/volume", { n: n }).finally(() => {
+    volBusy = false;
+    if (volPending != null) pumpVol();
+  });
+}
+$("vol").addEventListener("input", (e) => setVol(e.target.value));
+$("vol").addEventListener("change", (e) => setVol(e.target.value));
+$("vol").addEventListener("pointerdown", () => { volUser = true; });
+$("vol").addEventListener("pointerup", () => { volUser = false; });
+$("vol").addEventListener("pointercancel", () => { volUser = false; });
+$("vol").addEventListener("touchstart", () => { volUser = true; }, { passive: true });
+$("vol").addEventListener("touchend", () => { volUser = false; });
 
 $("seek").addEventListener("click", (e) => {
   const p = last.player || {};
@@ -367,7 +389,7 @@ async function tick() {
     $("fill").style.width = (p.duration ? (100 * p.position / p.duration) : 0) + "%";
     $("playbtn").textContent = playing ? "Pause" : "Play";
     $("err").textContent = p.error || "";
-    $("vol").value = st.volume == null ? 100 : st.volume;
+    if (!volUser) $("vol").value = st.volume == null ? 100 : st.volume;
     const badge = $("state");
     badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
     badge.textContent = playing ? "Playing" : paused ? "Paused" : "Idle";
