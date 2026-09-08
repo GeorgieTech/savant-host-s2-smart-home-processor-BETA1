@@ -1,0 +1,11 @@
+{
+  "name": "CRYPT S2 Web UI",
+  "install": "command -v python3 >/dev/null 2>&1 || { echo 'python3 missing' >&2; exit 1; }; if ! command -v ffmpeg >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg; fi; chmod +x .cursor/run-dev.sh; ffmpeg -version | head -1; python3 --version",
+  "terminals": [
+    {
+      "name": "crypt-web",
+      "command": "./.cursor/run-dev.sh"
+    }
+  ],
+  "ports": [8080]
+}
