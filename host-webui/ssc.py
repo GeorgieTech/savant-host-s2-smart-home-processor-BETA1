@@ -21,6 +21,7 @@ DEFAULT_DEVICES = (
         "host": os.environ.get("SSC14_HOST", os.environ.get("SSC_HOST", "192.168.1.136")),
         "port": int(os.environ.get("SSC14_PORT", os.environ.get("SSC_PORT", "23"))),
         "relays": 7,
+        "uid": "001AAE01C4D20021",
     },
     {
         "id": "ssc12",
@@ -29,7 +30,8 @@ DEFAULT_DEVICES = (
         "host": os.environ.get("SSC12_HOST", "192.168.1.138"),
         "port": int(os.environ.get("SSC12_PORT", "23")),
         "relays": 2,
-        "timeout": 2.5,
+        "timeout": 1.5,
+        "uid": "001AAE13DF600020",
     },
 )
 
@@ -41,6 +43,14 @@ _RE_UP = re.compile(r"MCU Uptime:\s*([^\r\n]+?)(?:\s{2,}|\s+\d+\s+total)")
 _RE_RELAY = re.compile(r"Relay Status:\s*([0-9 ]+)")
 _RE_COUNTS = re.compile(r"Counts:\s*([0-9 ]+)")
 _RE_MODEL = re.compile(r"SSC-00[0-9]{2}")
+_RE_UPLINK = re.compile(r"Uplinked\s+([0-9.]+):(\d+)")
+_RE_NOT_UPLINK = re.compile(r"Not uplinked:\s*(\d+)")
+_RE_GPIO0 = re.compile(r"GPIO0\s+\S+\(([^)]+)\)")
+
+AVD_PROBE = bytes.fromhex("025004")
+AVD_UPLINK_ON = bytes.fromhex("03500401")
+AVD_DISCOVERY_PORT = 12004
+AVD_DEVICE_PORT = 12005
 
 
 def _process_iac(data, pending):
@@ -140,6 +150,18 @@ def parse_show(text, relay_count=None, default_model="SSC"):
     m = _RE_MODEL.search(text)
     if m:
         model = m.group(0)
+    up_ip, up_port = "", 0
+    m = _RE_UPLINK.search(text)
+    if m:
+        up_ip, up_port = m.group(1), int(m.group(2))
+    not_up = 0
+    m = _RE_NOT_UPLINK.search(text)
+    if m:
+        not_up = int(m.group(1))
+    gpio_host = False
+    m = _RE_GPIO0.search(text)
+    if m:
+        gpio_host = m.group(1).strip().lower() == "host"
     return {
         "model": model,
         "fw": fw,
@@ -152,6 +174,11 @@ def parse_show(text, relay_count=None, default_model="SSC"):
         "net_mode": mode,
         "uptime": uptime,
         "relays": relays,
+        "uplinked_ip": up_ip,
+        "uplinked_port": up_port,
+        "uplinked": bool(up_ip and up_ip != "0.0.0.0"),
+        "not_uplinked": not_up,
+        "gpio_host": gpio_host,
     }
 
 
@@ -164,12 +191,14 @@ class SscClient(object):
         self.port = int(spec.get("port") or 23)
         self.relay_count = int(spec.get("relays") or 0)
         self.timeout = float(spec.get("timeout") or 4.0)
+        self.expect_uid = (spec.get("uid") or "").upper()
         self.lock = threading.Lock()
         self._sock = None
         self._iac = b""
         self.last_error = None
         self._cache = None
         self._cache_at = 0.0
+        self._cli_fail_at = 0.0
 
     def close(self):
         with self.lock:
@@ -199,6 +228,13 @@ class SscClient(object):
                 for i in range(self.relay_count)
             ],
             "error": err,
+            "cli": False,
+            "seen": False,
+            "uplinked": False,
+            "uplinked_ip": "",
+            "uplinked_port": 0,
+            "gpio_host": False,
+            "uid": self.expect_uid,
         }
 
     def snapshot(self, force=False):
@@ -206,6 +242,8 @@ class SscClient(object):
             now = time.time()
             if not force and self._cache and (now - self._cache_at) < 0.8:
                 return dict(self._cache)
+            if not force and self._cli_fail_at and (now - self._cli_fail_at) < 20:
+                return self._offline(self.last_error or "ssc closed the socket")
             try:
                 text = self._cmd("show", wait=6.0)
                 if "PASS" not in text:
@@ -214,6 +252,8 @@ class SscClient(object):
                 snap = {
                     "ok": True,
                     "online": True,
+                    "cli": True,
+                    "seen": True,
                     "id": self.id,
                     "title": self.title,
                     "host": self.host,
@@ -226,9 +266,11 @@ class SscClient(object):
                 self._cache = snap
                 self._cache_at = time.time()
                 self.last_error = None
+                self._cli_fail_at = 0.0
                 return dict(snap)
             except Exception as exc:
                 self._close()
+                self._cli_fail_at = time.time()
                 return self._offline(str(exc))
 
     def set_relay(self, port, on):
@@ -329,6 +371,131 @@ class SscClient(object):
             return self._read(max_wait=wait, idle=0.28, need_prompt=True)
 
 
+def _crypt_uid():
+    env = (os.environ.get("CRYPT_UID") or "").strip().upper()
+    if len(env) >= 12:
+        return env[:16].ljust(16, "0")
+    try:
+        hn = socket.gethostname()
+    except Exception:
+        hn = ""
+    m = re.search(r"([0-9A-Fa-f]{16})", hn)
+    if m:
+        return m.group(1).upper()
+    return "001AAE10E4090000"
+
+
+class AvdHost(object):
+    """Minimal Savant AVD discovery: host probe 02 50 04 + uplink-on 03 50 04 01."""
+
+    def __init__(self, clients):
+        self.clients = list(clients)
+        self.uid = _crypt_uid()
+        self.lock = threading.Lock()
+        self.beacons = {}
+        self._sock = None
+        self._stop = False
+        self.last_error = None
+        t = threading.Thread(target=self._run, name="avd-host")
+        t.daemon = True
+        t.start()
+
+    def for_client(self, client):
+        with self.lock:
+            by_ip = self.beacons.get(client.host)
+            if by_ip:
+                return dict(by_ip)
+            if client.expect_uid:
+                for rec in self.beacons.values():
+                    if rec.get("uid") == client.expect_uid:
+                        return dict(rec)
+        return None
+
+    def _run(self):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.bind(("0.0.0.0", AVD_DISCOVERY_PORT))
+            sock.settimeout(0.5)
+            self._sock = sock
+        except Exception as exc:
+            self.last_error = str(exc)
+            return
+        last_probe = 0.0
+        last_uplink = {}
+        host29 = self._host_announce()
+        while not self._stop:
+            now = time.time()
+            if now - last_probe >= 2.0:
+                try:
+                    sock.sendto(AVD_PROBE, ("192.168.1.255", AVD_DISCOVERY_PORT))
+                    last_probe = now
+                except Exception as exc:
+                    self.last_error = str(exc)
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                self.last_error = str(exc)
+                time.sleep(0.5)
+                continue
+            rec = self._parse_beacon(data, addr)
+            if rec and rec.get("uid") == self.uid:
+                rec = None
+            if rec:
+                with self.lock:
+                    self.beacons[rec["ip"]] = rec
+                key = rec["ip"]
+                if now - last_uplink.get(key, 0) >= 5.0:
+                    last_uplink[key] = now
+                    try:
+                        sock.sendto(AVD_PROBE, (rec["ip"], AVD_DEVICE_PORT))
+                        sock.sendto(AVD_UPLINK_ON, (rec["ip"], AVD_DEVICE_PORT))
+                        sock.sendto(host29, (rec["ip"], AVD_DEVICE_PORT))
+                    except Exception:
+                        pass
+
+    def _local_ip(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("192.168.1.1", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "192.168.1.179"
+
+    def _host_announce(self):
+        ip = self._local_ip()
+        parts = [int(x) for x in ip.split(".")]
+        while len(parts) < 4:
+            parts.append(0)
+        tail = bytes([1, parts[0], parts[1], parts[2], parts[3], 0, 1, 0, 0, 0])
+        body = bytes([0x50, 0x04]) + self.uid.encode("ascii")[:16].ljust(16, b"0") + tail
+        return bytes([len(body)]) + body
+
+    def _parse_beacon(self, data, addr):
+        if not data or len(data) < 19:
+            return None
+        if data[0] != 0x1C or data[1] != 0x50:
+            return None
+        try:
+            uid = data[3:19].decode("ascii").upper()
+        except Exception:
+            return None
+        if not re.match(r"^[0-9A-F]{16}$", uid):
+            return None
+        return {
+            "ip": addr[0],
+            "port": addr[1],
+            "uid": uid,
+            "at": time.time(),
+            "raw": data.hex(),
+        }
+
+
 class SscHub(object):
     def __init__(self, devices=None):
         self.clients = []
@@ -337,12 +504,37 @@ class SscHub(object):
             client = SscClient(spec)
             self.clients.append(client)
             self.by_id[client.id] = client
+        self.avd = AvdHost(self.clients)
 
     def get(self, devid):
         client = self.by_id.get(devid)
         if client is None:
             raise KeyError("unknown expander %s" % devid)
         return client
+
+    def _merge_beacon(self, client, snap):
+        rec = self.avd.for_client(client)
+        now = time.time()
+        if rec and (now - rec.get("at", 0)) < 30:
+            snap["seen"] = True
+            snap["seen_age"] = int(now - rec["at"])
+            if rec.get("uid") and not snap.get("uid"):
+                snap["uid"] = rec["uid"]
+            snap["beacon_ip"] = rec.get("ip")
+        else:
+            snap["seen"] = bool(snap.get("cli"))
+            snap["seen_age"] = None
+        snap["cli"] = bool(snap.get("cli"))
+        if snap.get("cli"):
+            snap["online"] = True
+            snap["ok"] = True
+        elif snap.get("seen"):
+            snap["online"] = True
+            snap["ok"] = True
+            err = snap.get("error") or ""
+            if (not err) or "closed" in err or "timeout" in err:
+                snap["error"] = "CLI down — heard on UDP 12004"
+        return snap
 
     def snapshot_all(self, force=False):
         box = {}
@@ -357,17 +549,19 @@ class SscHub(object):
             t.start()
             threads.append((t, client))
         for t, client in threads:
-            t.join(12.0)
+            t.join(8.0)
             if t.is_alive() and client.id not in box:
                 box[client.id] = client._offline("timeout")
         devices = []
         for client in self.clients:
             snap = box.get(client.id) or client._offline("no snapshot")
-            devices.append(snap)
+            devices.append(self._merge_beacon(client, snap))
         online = sum(1 for d in devices if d.get("online"))
         return {
             "ok": True,
             "online": online,
             "count": len(devices),
             "devices": devices,
+            "avd_uid": self.avd.uid,
+            "avd_error": self.avd.last_error,
         }

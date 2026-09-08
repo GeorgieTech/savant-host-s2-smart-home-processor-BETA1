@@ -236,6 +236,8 @@ input[type=range] { flex: 1; accent-color: #c45c26; height: 28px; }
 }
 .badge.live { color: #c9e0b0; border-color: #4a6a3a; }
 .badge.live::before { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.badge.seen { color: #e0c48a; border-color: var(--ember); }
+.badge.seen::before { background: var(--ember); box-shadow: 0 0 8px var(--ember); }
 .badge.dead { color: var(--danger); border-color: var(--blood); }
 .badge.dead::before { background: var(--danger); }
 

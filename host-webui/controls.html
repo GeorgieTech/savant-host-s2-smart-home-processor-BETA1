@@ -45,7 +45,7 @@ function esc(s) {
 
 function coilRow(dev, r) {
   const on = !!r.on;
-  const locked = !!busy[dev.id] || !dev.online;
+  const locked = !!busy[dev.id] || !dev.cli;
   const el = document.createElement("div");
   el.className = "coil" + (on ? " hot" : "");
   el.innerHTML =
@@ -66,18 +66,23 @@ function coilRow(dev, r) {
 function deviceCard(dev) {
   const card = document.createElement("section");
   card.className = "card";
-  const online = !!dev.online;
-  const locked = !!busy[dev.id] || !online;
+  const cli = !!dev.cli;
+  const seen = !!dev.seen || cli;
+  const locked = !!busy[dev.id] || !cli;
+  let badge = "dead";
+  let badgeText = "Offline";
+  if (cli) { badge = "live"; badgeText = dev.uplinked || dev.gpio_host ? "Uplinked" : "Online"; }
+  else if (seen) { badge = "seen"; badgeText = "Seen"; }
   const bits = [dev.model || "SSC", dev.host || ""];
   if (dev.uid) bits.push(dev.uid);
   if (dev.fw) bits.push("FW " + dev.fw);
   if (dev.uptime) bits.push(dev.uptime);
+  if (dev.uplinked_ip && dev.uplinked_ip !== "0.0.0.0") bits.push("uplink " + dev.uplinked_ip);
   const head = document.createElement("div");
   head.className = "device-head";
   head.innerHTML =
     "<div><h2>" + esc(dev.title || dev.model) + "</h2></div>" +
-    "<span class='badge " + (online ? "live" : "dead") + "'>" +
-    (online ? "Online" : "Offline") + "</span>";
+    "<span class='badge " + badge + "'>" + badgeText + "</span>";
   card.appendChild(head);
   const ident = document.createElement("p");
   ident.className = "ident";

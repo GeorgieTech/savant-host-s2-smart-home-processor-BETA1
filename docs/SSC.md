@@ -29,6 +29,12 @@ The client will refuse anything else (`ip`, `mac`, `reset`, `gpio`, `bl`, …). 
 
 UI: [http://192.168.1.179/controls](http://192.168.1.179/controls)
 
+## Discovery / fake host uplink
+
+CRYPT binds **UDP 12004** and sends the Savant host probe `02 50 04` (same 3-byte packet a real host uses). Expanders announce themselves with a 29-byte `1c 50 04` + UID beacon from port 12005.
+
+After a beacon, CRYPT unicasts probe + `03 50 04 01` (uplink-on) to the expander. That is a minimal AVD fake, not full PeripheralDeviceManager.
+
 ## SSC-0012 telnet note
 
-Port 23 is open but currently **tcpwrapped** (accept then close) from both this Mac and the S2. Firmware still contains the same `relay on` / `relay off` CLI. If the Relays page shows the 12 offline, power-cycle the expander (do not hold reset 5 seconds — that clears network settings) and reload the page.
+Port 23 is open but currently **tcpwrapped** (accept then close). Relays on the 12 stay disabled until CLI comes up. UDP beacons still mark it **Seen**. A power cycle (not a 5-second reset) is the first fix to try for CLI.
