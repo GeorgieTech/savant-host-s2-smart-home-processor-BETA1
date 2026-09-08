@@ -34,6 +34,13 @@
       </div>
       <div class="now" id="now">Nothing playing</div>
       <div class="meta" id="meta">0:00 / 0:00</div>
+      <div class="clock-stats" id="clockstats">
+        <div><span class="k">Time Clock</span><span class="v" id="clk-heard">0:00.000</span></div>
+        <div><span class="k">Playback</span><span class="v" id="clk-play">0:00.000</span></div>
+        <div><span class="k">Offset</span><span class="v" id="clk-off">—</span></div>
+        <div><span class="k">Clock</span><span class="v" id="clk-lock">idle</span></div>
+        <p class="clock-note" id="clk-note">Host Time Clock vs decoder timing</p>
+      </div>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
         <div class="wave-legend">
@@ -107,6 +114,12 @@ function fmt(sec) {
   const s = Math.floor(sec % 60);
   return m + ":" + String(s).padStart(2, "0");
 }
+function fmt3(sec) {
+  sec = Math.max(0, sec || 0);
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return m + ":" + s.toFixed(3).padStart(6, "0");
+}
 function esc(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
@@ -176,9 +189,10 @@ function syncTap(p, playing) {
     tap.audio.src = mediaUrl(p.name);
     try { tap.audio.load(); } catch (e) {}
   }
-  const pos = p.position || 0;
+  const ck = p.clock || {};
+  const pos = (ck.heard != null ? ck.heard : p.position) || 0;
   try {
-    if (Math.abs((tap.audio.currentTime || 0) - pos) > 0.45) {
+    if (Math.abs((tap.audio.currentTime || 0) - pos) > 0.12) {
       tap.audio.currentTime = pos;
     }
   } catch (e) {}
@@ -262,7 +276,10 @@ $("wscroll").addEventListener("touchmove", (e) => {
   const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   setZoomSec(pinchZoom * (pinch0 / Math.max(8, d)));
 }, { passive: true });
-let playClock = { at: 0, pos: 0, playing: false, duration: 0, name: "" };
+let playClock = {
+  at: 0, heard: 0, playback: 0, pos: 0, playing: false, duration: 0, name: "",
+  latency_ms: 0, buffer_ms: 0, sink_ms: 0, paplay_ms: 90, locked: false
+};
 let rw = { name: "", n: 0, l: [], m: [], h: [], analyzing: false, timer: 0, zoomSec: 10 };
 const ZOOM_STEPS = [2, 3, 4, 6, 8, 10, 12, 16, 24, 32, 48];
 function zoomWindow() {
@@ -286,9 +303,34 @@ function nudgeZoom(dir) {
   setZoomSec(ZOOM_STEPS[idx]);
 }
 function nowPos() {
-  if (!playClock.playing) return playClock.pos || 0;
-  const p = playClock.pos + (performance.now() - playClock.at) / 1000;
+  return nowClock("heard");
+}
+function nowClock(field) {
+  const base = playClock[field] != null ? playClock[field] : (playClock.pos || 0);
+  if (!playClock.playing) return base || 0;
+  const p = base + (performance.now() - playClock.at) / 1000;
   return Math.max(0, Math.min(playClock.duration || p, p));
+}
+function paintClockStats(heard, playback) {
+  if (!$("clk-heard")) return;
+  $("clk-heard").textContent = fmt3(heard);
+  $("clk-play").textContent = fmt3(playback);
+  const off = Math.max(0, Math.round((playback - heard) * 1000));
+  $("clk-off").textContent = playClock.name ? (off + " ms") : "—";
+  const lock = $("clk-lock");
+  let label = "idle";
+  let kind = "loose";
+  if (playClock.playing && playClock.locked) { label = "locked"; kind = "lock"; }
+  else if (playClock.playing) { label = "locking"; kind = "loose"; }
+  else if (playClock.name) { label = "frozen"; kind = "loose"; }
+  lock.textContent = label;
+  lock.className = "v " + kind;
+  const buf = playClock.buffer_ms || 0;
+  const sink = playClock.sink_ms || 0;
+  const pap = playClock.paplay_ms || 90;
+  $("clk-note").textContent = playClock.name
+    ? ("buffer " + buf + " ms · TOSLINK " + sink + " ms · paplay " + pap + " ms")
+    : "Host Time Clock vs decoder timing";
 }
 function loadWave(name) {
   if (!name) {
@@ -488,8 +530,11 @@ function drawRekord() {
   if (!scroll || !over) return;
   const pos = nowPos();
   const dur = playClock.duration || 0;
+  const playback = nowClock("playback");
   paintScroll(scroll, pos, dur);
   paintOver(over, pos, dur);
+  if ($("meta")) $("meta").textContent = fmt(pos) + " / " + fmt(dur);
+  paintClockStats(pos, playback);
 }
 function paintScroll(s, pos, dur) {
   const ctx = s.ctx, w = s.w, h = s.h;
@@ -619,14 +664,25 @@ async function tick() {
     syncTap(p, playing);
     $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
     $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
-    $("meta").textContent = fmt(p.position) + " / " + fmt(p.duration);
+    const ck = p.clock || {};
+    const heard = (ck.heard != null ? ck.heard : p.position) || 0;
+    const playback = (ck.playback != null ? ck.playback : p.playback) || heard;
+    $("meta").textContent = fmt(heard) + " / " + fmt(p.duration);
     playClock = {
       at: performance.now(),
-      pos: p.position || 0,
+      heard: heard,
+      playback: playback,
+      pos: heard,
       playing: playing,
       duration: p.duration || 0,
-      name: p.name || ""
+      name: p.name || "",
+      latency_ms: ck.latency_ms || 0,
+      buffer_ms: ck.buffer_ms || 0,
+      sink_ms: ck.sink_ms || 0,
+      paplay_ms: ck.paplay_ms || 90,
+      locked: !!ck.locked
     };
+    paintClockStats(heard, playback);
     loadWave(p.name || "");
     $("playbtn").textContent = playing ? "Pause" : "Play";
     $("err").textContent = p.error || "";
