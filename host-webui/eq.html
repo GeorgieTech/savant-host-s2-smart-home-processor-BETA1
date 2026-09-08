@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07060a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CRYPT">
+<title>CRYPT — EQ</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/crypt.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1>CRYPT</h1>
+      <div class="sub">EQ</div>
+    </div>
+    <div class="hostline" id="hostline">TOSLINK · 10-band</div>
+  </header>
+  <main class="page">
+    <section class="card">
+      <div class="section-head">
+        <h2>Equalizer</h2>
+        <span class="badge" id="state">Idle</span>
+      </div>
+      <p class="hint">Ten bands run on the S2 in ffmpeg, then out TOSLINK. There is no in-browser playback. Sliders apply when you release them so the DualLite does not restart the decoder on every drag.</p>
+      <div class="eq-presets" id="presets"></div>
+      <p class="eq-note" id="note"></p>
+      <div class="eq-board" id="board"></div>
+      <div class="err" id="err"></div>
+      <div class="okline" id="ok"></div>
+    </section>
+  </main>
+  <nav class="tabbar">
+    <a href="/">Playing</a>
+    <a href="/library">Library</a>
+    <a class="on" href="/eq">EQ</a>
+    <a href="/controls">Relays</a>
+  </nav>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const EQ_BANDS = [
+  { freq: 32, label: "32", type: "lowshelf" },
+  { freq: 64, label: "64", type: "peaking" },
+  { freq: 125, label: "125", type: "peaking" },
+  { freq: 250, label: "250", type: "peaking" },
+  { freq: 500, label: "500", type: "peaking" },
+  { freq: 1000, label: "1k", type: "peaking" },
+  { freq: 2000, label: "2k", type: "peaking" },
+  { freq: 4000, label: "4k", type: "peaking" },
+  { freq: 8000, label: "8k", type: "peaking" },
+  { freq: 16000, label: "16k", type: "highshelf" }
+];
+const EQ_PRESETS = [
+  { id: "flat", name: "Flat", blurb: "No boost or cut. A level starting point.", gains: [0,0,0,0,0,0,0,0,0,0] },
+  { id: "harman", name: "Harman", blurb: "Harman loudspeaker target (Olive 2013 in-room preference): bass shelf below ~100 Hz, then a gentle downward tilt through the treble. 10-band fit, 1 kHz at 0 dB.", gains: [6.5, 6.0, 4.0, 1.5, 0.5, 0, -0.5, -2.5, -4.0, -6.0] },
+  { id: "bk1974", name: "B&K 1974", blurb: "Brüel & Kjær 1974 hi-fi room curve: fairly level bass into the lower mids, then a slow roll-off toward the top. 10-band fit, 1 kHz at 0 dB.", gains: [2.0, 2.0, 1.8, 1.0, 0.5, 0, -0.8, -1.6, -2.5, -4.0] },
+  { id: "hifi", name: "Optimum HiFi", blurb: "Classic “optimum hi-fi” house curve: mild bass lift, a presence dip around 2–4 kHz, and easier treble. 10-band fit, 1 kHz at 0 dB.", gains: [3.0, 2.5, 1.5, 0.5, 0.2, 0, -1.5, -2.0, -1.0, -2.5] },
+  { id: "nad", name: "NAD / Bluesound", blurb: "NAD / Bluesound house target: punch around 30–60 Hz, less deep rumble than a full bass shelf, warmer and steeper highs than Harman. 10-band fit, 1 kHz at 0 dB.", gains: [5.5, 4.0, 2.5, 1.0, 0.3, 0, -1.2, -3.0, -5.0, -7.5] }
+];
+
+let gains = EQ_BANDS.map(() => 0);
+let eqTimer = null;
+let lastPlayer = {};
+
+function clamp(v) {
+  v = Number(v);
+  if (!isFinite(v)) return 0;
+  return Math.max(-12, Math.min(12, v));
+}
+function fmtGain(n) {
+  const v = clamp(n);
+  if (v > 0) return "+" + v.toFixed(v % 1 ? 1 : 0);
+  return String(v % 1 ? v.toFixed(1) : v);
+}
+function matchPreset(vals) {
+  for (let p = 0; p < EQ_PRESETS.length; p++) {
+    let ok = true;
+    for (let i = 0; i < EQ_BANDS.length; i++) {
+      if (Math.abs((vals[i] || 0) - EQ_PRESETS[p].gains[i]) > 0.35) { ok = false; break; }
+    }
+    if (ok) return EQ_PRESETS[p].id;
+  }
+  return "";
+}
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function paintPresets() {
+  const wrap = $("presets");
+  if (wrap.dataset.ready !== "1") {
+    wrap.innerHTML = "";
+    EQ_PRESETS.forEach((preset) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost";
+      btn.dataset.preset = preset.id;
+      btn.textContent = preset.name;
+      btn.title = preset.blurb;
+      btn.onclick = () => applyGains(preset.gains, true);
+      wrap.appendChild(btn);
+    });
+    wrap.dataset.ready = "1";
+  }
+  const id = matchPreset(gains);
+  wrap.querySelectorAll("button").forEach((btn) => btn.classList.toggle("on", btn.dataset.preset === id));
+  const preset = EQ_PRESETS.filter((p) => p.id === id)[0];
+  $("note").textContent = preset ? preset.blurb : "Custom — a band was moved off the selected curve.";
+}
+
+function paintBoard() {
+  const board = $("board");
+  if (board.dataset.ready === "1") {
+    board.querySelectorAll("input[type=range]").forEach((el, i) => {
+      if (document.activeElement !== el) el.value = String(gains[i]);
+      const gainEl = el.closest(".eq-band").querySelector(".gain");
+      if (gainEl) gainEl.textContent = fmtGain(gains[i]);
+    });
+    return;
+  }
+  board.innerHTML = "";
+  EQ_BANDS.forEach((band, i) => {
+    const col = document.createElement("div");
+    col.className = "eq-band";
+    const gain = document.createElement("span");
+    gain.className = "gain";
+    gain.textContent = fmtGain(gains[i]);
+    const wrap = document.createElement("div");
+    wrap.className = "eq-slider";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "-12";
+    input.max = "12";
+    input.step = "0.5";
+    input.value = String(gains[i] || 0);
+    input.setAttribute("aria-label", band.label + " Hz");
+    input.oninput = () => {
+      const next = gains.slice();
+      next[i] = Number(input.value);
+      applyGains(next, false);
+    };
+    input.onchange = () => {
+      const next = gains.slice();
+      next[i] = Number(input.value);
+      applyGains(next, true);
+    };
+    wrap.appendChild(input);
+    const hz = document.createElement("span");
+    hz.className = "hz";
+    hz.textContent = band.label;
+    col.appendChild(gain);
+    col.appendChild(wrap);
+    col.appendChild(hz);
+    board.appendChild(col);
+  });
+  board.dataset.ready = "1";
+}
+
+function applyGains(next, persist) {
+  gains = EQ_BANDS.map((_, i) => clamp(next && next[i]));
+  paintBoard();
+  paintPresets();
+  if (!persist) return;
+  persistNow();
+}
+
+function persistNow() {
+  if (eqTimer) clearTimeout(eqTimer);
+  const next = gains.slice();
+  eqTimer = setTimeout(async () => {
+    try {
+      const st = await api("/api/eq", { eq: next });
+      if (!st.ok && st.error) throw new Error(st.error);
+      $("ok").textContent = "Applied to TOSLINK";
+      $("err").textContent = "";
+    } catch (e) {
+      $("err").textContent = e.message || "EQ did not apply";
+    }
+  }, 80);
+}
+
+async function tick() {
+  try {
+    const st = await (await fetch("/api/status")).json();
+    const p = st.player || {};
+    lastPlayer = p;
+    $("hostline").textContent = p.name ? ("Now · TOSLINK") : "TOSLINK · 10-band";
+    const badge = $("state");
+    const playing = !!p.playing;
+    const paused = !!p.paused;
+    badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
+    badge.textContent = playing ? "Playing" : paused ? "Paused" : "Idle";
+  } catch (e) {
+    $("err").textContent = "Host is not answering";
+  }
+}
+
+async function boot() {
+  try {
+    const st = await api("/api/eq");
+    if (st.eq) applyGains(st.eq, false);
+    else { paintBoard(); paintPresets(); }
+  } catch (e) {
+    paintBoard();
+    paintPresets();
+    $("err").textContent = "Host is not answering";
+  }
+  tick();
+}
+
+window.addEventListener("pagehide", () => persistNow());
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) persistNow();
+});
+boot();
+setInterval(tick, 2500);
+</script>
+</body>
+</html>

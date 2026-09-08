@@ -329,6 +329,70 @@ input[type=range] { flex: 1; accent-color: #c45c26; height: 28px; }
   text-transform: uppercase;
 }
 
+.eq-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.eq-presets button.on {
+  background: #4a1212;
+  border-color: var(--ember);
+  color: var(--bone);
+}
+.eq-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0 0 14px;
+  min-height: 2.6em;
+}
+.eq-board {
+  display: flex;
+  gap: 4px;
+  justify-content: space-between;
+  align-items: stretch;
+  padding: 18px 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(0,0,0,0.22);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.eq-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 44px;
+  flex: 1;
+}
+.eq-band .gain {
+  font-size: 11px;
+  color: var(--ember);
+  font-variant-numeric: tabular-nums;
+  min-height: 1em;
+}
+.eq-slider {
+  height: 170px;
+  width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.eq-slider input[type=range] {
+  width: 170px;
+  height: 28px;
+  transform: rotate(-90deg);
+  accent-color: #c45c26;
+}
+.eq-band .hz {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .err { color: var(--danger); min-height: 1.2em; font-size: 13px; }
 .okline { color: var(--ok); min-height: 1.2em; font-size: 13px; }
 
@@ -427,9 +491,9 @@ input[type=range] { flex: 1; accent-color: #c45c26; height: 28px; }
   left: 0; right: 0; bottom: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 0;
-  padding: 6px 8px calc(8px + var(--safe-bot));
+  padding: 6px 6px calc(8px + var(--safe-bot));
   background: rgba(10,8,12,0.94);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -439,11 +503,11 @@ input[type=range] { flex: 1; accent-color: #c45c26; height: 28px; }
   color: var(--muted);
   text-decoration: none;
   text-align: center;
-  padding: 10px 4px;
+  padding: 10px 2px;
   min-height: 44px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 650;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   border-radius: 12px;
 }

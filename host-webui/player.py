@@ -12,6 +12,47 @@ PULSE_SINK = os.environ.get("PULSE_SINK", "@DEFAULT_SINK@")
 FFMPEG_LOG = os.environ.get("FFMPEG_LOG", "/tmp/crypt-ffmpeg.log")
 # DualLite is happier at 48 kHz; Pulse resamples onto the 96 kHz S/PDIF sink.
 RATE = os.environ.get("CRYPT_RATE", "48000")
+EQ_Q = 1.1
+EQ_BANDS = (
+    ("lowshelf", 32, "32"),
+    ("peaking", 64, "64"),
+    ("peaking", 125, "125"),
+    ("peaking", 250, "250"),
+    ("peaking", 500, "500"),
+    ("peaking", 1000, "1k"),
+    ("peaking", 2000, "2k"),
+    ("peaking", 4000, "4k"),
+    ("peaking", 8000, "8k"),
+    ("highshelf", 16000, "16k"),
+)
+
+
+def clamp_eq(values):
+    out = [0.0] * len(EQ_BANDS)
+    if not isinstance(values, (list, tuple)):
+        return out
+    for i in range(min(len(EQ_BANDS), len(values))):
+        try:
+            out[i] = max(-12.0, min(12.0, float(values[i])))
+        except (TypeError, ValueError):
+            out[i] = 0.0
+    return out
+
+
+def ffmpeg_eq_filter(gains):
+    """Match BETA2: Q 1.1, lowshelf / peaking / highshelf on TOSLINK."""
+    gains = clamp_eq(gains)
+    parts = []
+    for (kind, freq, _label), gain in zip(EQ_BANDS, gains):
+        if abs(gain) < 0.05:
+            continue
+        if kind == "lowshelf":
+            parts.append("lowshelf=f=%s:t=q:w=%s:g=%.2f" % (freq, EQ_Q, gain))
+        elif kind == "highshelf":
+            parts.append("highshelf=f=%s:t=q:w=%s:g=%.2f" % (freq, EQ_Q, gain))
+        else:
+            parts.append("equalizer=f=%s:t=q:w=%s:g=%.2f" % (freq, EQ_Q, gain))
+    return ",".join(parts)
 
 
 def _cmd(args):
@@ -35,6 +76,8 @@ class HostPlayer(object):
         self.duration = 0.0
         self.error = ""
         self.generation = 0
+        self.eq = [0.0] * len(EQ_BANDS)
+        self._eq_timer = None
         threading.Thread(target=self._watch, daemon=True).start()
 
     def snapshot(self):
@@ -47,6 +90,7 @@ class HostPlayer(object):
                 "position": self._position_locked(),
                 "duration": round(self.duration or 0.0, 2),
                 "error": self.error,
+                "eq": list(self.eq),
             }
 
     def play(self, relname, start=0.0):
@@ -74,20 +118,23 @@ class HostPlayer(object):
 
     def pause(self):
         with self.lock:
-            if not self._alive_locked():
-                self.error = "nothing playing"
-                return False
-            if self.paused:
-                return True
-            self.hold = self._position_locked()
-            try:
-                os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
-            except Exception as exc:
-                self.error = str(exc)
-                return False
-            self.paused = True
-            self.error = ""
+            return self._pause_locked()
+
+    def _pause_locked(self):
+        if not self._alive_locked():
+            self.error = "nothing playing"
+            return False
+        if self.paused:
             return True
+        self.hold = self._position_locked()
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
+        except Exception as exc:
+            self.error = str(exc)
+            return False
+        self.paused = True
+        self.error = ""
+        return True
 
     def resume(self):
         with self.lock:
@@ -130,6 +177,40 @@ class HostPlayer(object):
             if self.duration > 0:
                 pos = min(pos, max(0.0, self.duration - 0.15))
             return self._play_locked(self.media, pos)
+
+    def set_eq(self, gains):
+        next_eq = clamp_eq(gains)
+        with self.lock:
+            same = self.eq == next_eq
+            self.eq = next_eq
+            if self._eq_timer is not None:
+                try:
+                    self._eq_timer.cancel()
+                except Exception:
+                    pass
+                self._eq_timer = None
+            if same or not self.media:
+                return True
+            if not self._alive_locked() and not self.paused:
+                return True
+            timer = threading.Timer(0.4, self._apply_eq_now)
+            timer.daemon = True
+            self._eq_timer = timer
+            timer.start()
+        return True
+
+    def _apply_eq_now(self):
+        with self.lock:
+            self._eq_timer = None
+            if not self.media:
+                return
+            if not self._alive_locked() and not self.paused:
+                return
+            pos = self._position_locked()
+            paused = self.paused
+            ok = self._play_locked(self.media, pos)
+            if ok and paused:
+                self._pause_locked()
 
     def set_volume(self, n):
         try:
@@ -204,17 +285,20 @@ class HostPlayer(object):
         self._stop_locked()
         self.media = path
         ss = "-ss %.3f " % start if start > 0.04 else ""
+        af = ffmpeg_eq_filter(self.eq)
+        extra = ("-af %s " % shlex.quote(af)) if af else ""
         try:
             open(FFMPEG_LOG, "w").close()
         except OSError:
             pass
         cmd = (
             "ffmpeg -nostdin -hide_banner -nostats -loglevel error %s-i %s "
-            "-ac 2 -ar %s -f wav - 2>>%s | paplay --device=%s"
+            "-ac 2 -ar %s %s-f wav - 2>>%s | paplay --device=%s"
             % (
                 ss,
                 shlex.quote(path),
                 shlex.quote(RATE),
+                extra,
                 shlex.quote(FFMPEG_LOG),
                 shlex.quote(PULSE_SINK),
             )

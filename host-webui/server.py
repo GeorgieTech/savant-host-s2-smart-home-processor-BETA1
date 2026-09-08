@@ -13,11 +13,97 @@ import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from player import HostPlayer, MUSIC_DIR
+from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
 from ssc import SscHub
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
+EQ_FILE = os.environ.get("EQ_FILE", "/data/crypt/eq.json")
+EQ_PRESETS = (
+    {
+        "id": "flat",
+        "name": "Flat",
+        "blurb": "No boost or cut. A level starting point.",
+        "gains": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    },
+    {
+        "id": "harman",
+        "name": "Harman",
+        "blurb": "Harman loudspeaker target (Olive 2013 in-room preference): bass shelf below ~100 Hz, then a gentle downward tilt through the treble. 10-band fit, 1 kHz at 0 dB.",
+        "gains": [6.5, 6.0, 4.0, 1.5, 0.5, 0, -0.5, -2.5, -4.0, -6.0],
+    },
+    {
+        "id": "bk1974",
+        "name": "B&K 1974",
+        "blurb": "Brüel & Kjær 1974 hi-fi room curve: fairly level bass into the lower mids, then a slow roll-off toward the top. 10-band fit, 1 kHz at 0 dB.",
+        "gains": [2.0, 2.0, 1.8, 1.0, 0.5, 0, -0.8, -1.6, -2.5, -4.0],
+    },
+    {
+        "id": "hifi",
+        "name": "Optimum HiFi",
+        "blurb": "Classic “optimum hi-fi” house curve: mild bass lift, a presence dip around 2–4 kHz, and easier treble. 10-band fit, 1 kHz at 0 dB.",
+        "gains": [3.0, 2.5, 1.5, 0.5, 0.2, 0, -1.5, -2.0, -1.0, -2.5],
+    },
+    {
+        "id": "nad",
+        "name": "NAD / Bluesound",
+        "blurb": "NAD / Bluesound house target: punch around 30–60 Hz, less deep rumble than a full bass shelf, warmer and steeper highs than Harman. 10-band fit, 1 kHz at 0 dB.",
+        "gains": [5.5, 4.0, 2.5, 1.0, 0.3, 0, -1.2, -3.0, -5.0, -7.5],
+    },
+)
+
+
+def _eq_bands():
+    return [
+        {"type": kind, "freq": freq, "label": label}
+        for kind, freq, label in EQ_BANDS
+    ]
+
+
+def _match_preset(gains):
+    gains = clamp_eq(gains)
+    for preset in EQ_PRESETS:
+        ok = True
+        for i in range(len(EQ_BANDS)):
+            if abs(gains[i] - float(preset["gains"][i])) > 0.35:
+                ok = False
+                break
+        if ok:
+            return preset["id"]
+    return ""
+
+
+def _preset_gains(pid):
+    pid = str(pid or "").strip().lower()
+    for preset in EQ_PRESETS:
+        if preset["id"] == pid:
+            return clamp_eq(preset["gains"])
+    return None
+
+
+def _load_eq():
+    try:
+        with open(EQ_FILE, "r") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return clamp_eq(data.get("eq"))
+        return clamp_eq(data)
+    except (OSError, ValueError, TypeError):
+        return clamp_eq(None)
+
+
+def _save_eq(gains):
+    gains = clamp_eq(gains)
+    folder = os.path.dirname(EQ_FILE)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        tmp = EQ_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"eq": gains}, fh)
+        os.replace(tmp, EQ_FILE)
+    except OSError:
+        pass
+    return gains
 MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD", str(400 * 1024 * 1024)))
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._+\- ()\[\]]+")
@@ -27,6 +113,8 @@ PAGES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/library": ("library.html", "text/html; charset=utf-8"),
     "/library.html": ("library.html", "text/html; charset=utf-8"),
+    "/eq": ("eq.html", "text/html; charset=utf-8"),
+    "/eq.html": ("eq.html", "text/html; charset=utf-8"),
     "/controls": ("controls.html", "text/html; charset=utf-8"),
     "/controls.html": ("controls.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
@@ -145,6 +233,7 @@ class CryptApp(object):
         self.index = -1
         self.tracks = []
         self.player = HostPlayer(on_end=self._on_end)
+        self.player.set_eq(_load_eq())
         self.refresh()
 
     def refresh(self):
@@ -181,6 +270,7 @@ class CryptApp(object):
             tracks = list(self.tracks)
             idx = self.index
         queue, queue_total = self._upcoming(tracks, idx, 5)
+        eq = clamp_eq(snap.get("eq"))
         return {
             "host": socket.gethostname(),
             "model": "SHR-S2-00",
@@ -190,8 +280,32 @@ class CryptApp(object):
             "count": len(tracks),
             "queue": queue,
             "queue_total": queue_total,
+            "eq": eq,
+            "eq_preset": _match_preset(eq),
             "disk": _disk(),
         }
+
+    def eq_state(self):
+        eq = clamp_eq(self.player.snapshot().get("eq"))
+        return {
+            "ok": True,
+            "eq": eq,
+            "preset": _match_preset(eq),
+            "bands": _eq_bands(),
+            "presets": [dict(p) for p in EQ_PRESETS],
+        }
+
+    def set_eq(self, gains=None, preset=None):
+        if preset:
+            found = _preset_gains(preset)
+            if found is None:
+                raise ValueError("unknown preset")
+            gains = found
+        elif gains is None:
+            raise ValueError("need eq or preset")
+        eq = _save_eq(gains)
+        self.player.set_eq(eq)
+        return self.eq_state()
 
     def play_name(self, name, start=0.0):
         self.refresh()
@@ -296,6 +410,9 @@ class Handler(BaseHTTPRequestHandler):
                 APP.refresh()
                 self._send(200, {"tracks": _library(), "disk": _disk()})
                 return
+            if raw_path == "/api/eq":
+                self._send(200, APP.eq_state())
+                return
             if raw_path == "/api/ssc":
                 force = "fresh=1" in qs or "force=1" in qs
                 self._send(200, HUB.snapshot_all(force=force))
@@ -352,6 +469,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/volume":
                 ok = APP.player.set_volume(body.get("n"))
                 self._send(200 if ok else 400, {"ok": ok})
+                return
+            if path == "/api/eq":
+                try:
+                    st = APP.set_eq(gains=body.get("eq"), preset=body.get("preset"))
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                    return
+                self._send(200, st)
                 return
             if path == "/api/delete":
                 name = (body.get("name") or "").strip()
