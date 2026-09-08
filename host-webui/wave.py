@@ -15,9 +15,15 @@ from player import MUSIC_DIR
 
 WAVE_DIR = os.environ.get("CRYPT_WAVES", "/data/crypt/waves")
 WAVE_VER = 3
+# 80 Hz columns. Envelope is computed at 22.05 kHz, so DualLite cost is the
+# filter graph, not this rate. 80 was too heavy when aresample ran on raw PCM.
 RATE = 80
 MAX_FRAMES = 28800
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
+# percentile, gamma, gain, gate. Highs stay peak-referenced so hiss is not hats.
+SCALE_LOW = (0.95, 0.68, 1.00, 0.03)
+SCALE_MID = (0.94, 0.70, 1.00, 0.03)
+SCALE_HIGH = (0.99, 0.72, 0.90, 0.04)
 
 def _lower_nice():
     try:
@@ -164,7 +170,7 @@ def _analyze(full, on_progress=None):
         preexec_fn=_lower_nice,
     )
     raw = bytearray()
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + 150
     t0 = time.monotonic()
     last_pct = 3
     fd = proc.stdout.fileno() if proc.stdout else None
@@ -181,7 +187,7 @@ def _analyze(full, on_progress=None):
                     break
                 elapsed = time.monotonic() - t0
                 if expect <= 0:
-                    guess = min(88, 4 + int(elapsed / 25.0 * 84))
+                    guess = min(88, 4 + int(elapsed / 40.0 * 84))
                     if guess > last_pct:
                         last_pct = guess
                         report(guess, "Analyzing waveform")
@@ -193,7 +199,7 @@ def _analyze(full, on_progress=None):
             if expect > 0:
                 pct = min(96, 4 + int(len(raw) * 92 / float(expect)))
             else:
-                pct = min(88, 4 + int((time.monotonic() - t0) / 25.0 * 84))
+                pct = min(88, 4 + int((time.monotonic() - t0) / 40.0 * 84))
             if pct > last_pct:
                 last_pct = pct
                 report(pct, "Analyzing waveform")
@@ -264,9 +270,9 @@ def _analyze(full, on_progress=None):
         "v": WAVE_VER,
         "rate": RATE / float(step),
         "n": len(lows),
-        "l": _scale_band(lows, 0.95, 0.68, 1.00, 0.03),
-        "m": _scale_band(mids, 0.94, 0.70, 1.00, 0.03),
-        "h": _scale_band(highs, 0.90, 0.55, 1.12, 0.02),
+        "l": _scale_band(lows, *SCALE_LOW),
+        "m": _scale_band(mids, *SCALE_MID),
+        "h": _scale_band(highs, *SCALE_HIGH),
     }
 
 

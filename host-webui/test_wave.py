@@ -2,10 +2,13 @@
 """Waveform analyzer tests. Needs ffmpeg; no Pulse."""
 import math
 import os
+import shutil
 import struct
+import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wave as cryptwave
 
 
@@ -34,13 +37,20 @@ class ScaleBandTests(unittest.TestCase):
         old = cryptwave._scale_band(vals, 0.995, 0.92, 0.34, 0.16)
         self.assertEqual(old[0], 0)
 
-    def test_new_high_settings_keep_texture(self):
-        vals = [0.12] * 80 + [1.0]
-        new = cryptwave._scale_band(vals, 0.90, 0.55, 1.12, 0.02)
-        self.assertGreater(new[0], 40)
+    def test_dense_hats_stay_visible(self):
+        vals = [0.35] * 50 + [0.55] * 30 + [1.0]
+        out = cryptwave._scale_band(vals, *cryptwave.SCALE_HIGH)
+        self.assertGreater(out[0], 25)
+
+    def test_sparse_floor_is_not_full_scale(self):
+        vals = [0.05] * 80 + [1.0]
+        out = cryptwave._scale_band(vals, *cryptwave.SCALE_HIGH)
+        self.assertLess(out[0], 90)
+        self.assertGreater(out[-1], 180)
 
 
 class AnalyzeBandsTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required")
     def test_three_tones_land_in_the_right_band(self):
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)

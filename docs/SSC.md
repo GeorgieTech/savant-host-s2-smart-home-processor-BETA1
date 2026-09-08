@@ -11,7 +11,7 @@ The CRYPT host at **192.168.1.179** drives these expanders over the LAN. They ar
 | UID | `001AAE01C4D20021` |
 | Firmware family | ATMEL SAMD21 101.1.9.51 |
 
-V1.1 does not drive the SSC-0012 at `192.168.1.138`. Its telnet CLI is tcpwrapped (accept then close), so relays cannot be toggled.
+V1.1.1 does not drive the SSC-0012 at `192.168.1.138`. Its telnet CLI is tcpwrapped (accept then close), so relays cannot be toggled.
 
 ## Commands the host is allowed to send
 
