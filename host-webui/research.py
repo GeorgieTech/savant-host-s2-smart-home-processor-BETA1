@@ -235,6 +235,11 @@ class ResearchPlugin(object):
                 continue
             page = self._wiki_summary(title)
             if page:
+                long_text = self._wiki_extract(page.get("title") or title)
+                if long_text and len(long_text) > len(page.get("extract") or ""):
+                    page["extract_long"] = long_text
+                else:
+                    page["extract_long"] = page.get("extract") or ""
                 return page
         return {}
 
@@ -279,9 +284,30 @@ class ResearchPlugin(object):
             "title": _clean(data.get("title")) or title,
             "description": _clean(data.get("description")),
             "extract": extract,
+            "extract_long": extract,
             "url": page or url,
             "image": _clean(thumb.get("source")),
         }
+
+    def _wiki_extract(self, title):
+        url = WIKI.rstrip("/") + "/w/api.php?" + urlencode({
+            "action": "query",
+            "prop": "extracts",
+            "explaintext": "1",
+            "exsectionformat": "plain",
+            "titles": title,
+            "format": "json",
+            "utf8": "1",
+        })
+        data = self._get(url)
+        pages = ((data or {}).get("query") or {}).get("pages") if isinstance(data, dict) else None
+        if not isinstance(pages, dict):
+            return ""
+        for page in pages.values():
+            text = _clean((page or {}).get("extract"))
+            if text:
+                return text[:8000]
+        return ""
 
 
 PLUGIN = ResearchPlugin()

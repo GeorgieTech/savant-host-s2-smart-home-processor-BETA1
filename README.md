@@ -1,22 +1,22 @@
-# CRYPT — S2 Smart Home Processor V1.1.6
+# CRYPT — S2 Smart Home Processor V1.1.7
 
 Repo: `savant-host-s2-smart-home-processor-BETA1`
 
 A local TOSLINK music player on a recycled **Savant SHR-S2-00** rack host. Same job as [Gigawatt Beta2](https://github.com/GeorgieTech/savant-host-linux-media-player-BETA2) (library on disk, web UI, optical out), built from scratch for this DualLite chassis.
 
-**Current release: [V1.1.6](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.6)** (`v1.1.6`). Previous: [V1.1.5](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.5) · [V1.1.4](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.4) · [V1.1.3](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.3) · [V1.1.2](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.2) · [V1.1.1](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.1) · [V1.1](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.0) · [V1.0](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.0.0).
+**Current release: [V1.1.7](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.7)** (`v1.1.7`). Previous: [V1.1.6](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.6) · [V1.1.5](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.5) · [V1.1.4](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.4) · [V1.1.3](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.3) · [V1.1.2](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.2) · [V1.1.1](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.1) · [V1.1](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.1.0) · [V1.0](https://github.com/GeorgieTech/savant-host-s2-smart-home-processor-BETA1/releases/tag/v1.0.0).
 
 This project is **not affiliated with Savant Systems**.
 
 Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident), 192.168.1.178 (Gigawatt), or 192.168.1.180 (Giggwatt Beta1).
 
-## What V1.1.6 does
+## What V1.1.7 does
 
 - Spooky web UI on port 80
 - **Playing** page: now playing, FFT visualizer, Rekordbox-style 3-band waveform with beat grid, Time Clock vs decoder timing, transport, and the next 5 tracks in queue
 - **Library** page: upload with progress, browse by artist / album / track, playlists, and Manage for bulk delete (with progress) plus artist/album/genre edits
 - **Karaoke** page: MusicBee-style sidecar `.lrc` / tags / optional LRCLIB fetch, timed to Host Time Clock
-- **Report** page: artist / song / album report for later Instagram posts, with an optional MusicBrainz + Wikipedia research plugin
+- **Report** page: artist / song / album report for later Instagram posts. Research pulls MusicBrainz + Wikipedia, then writes a full meaning-and-life essay (SpaceXAI when `XAI_API_KEY` is set, otherwise a sourced essay from the pages we found)
 - **EQ** page: 31-band 1/3-octave TOSLINK graphic equalizer (ISO 266, Q 4.32) with the same HiFi presets expanded onto that grid
 - Play through the SHR-S2 **TOSLINK** jack (`ffmpeg` → `paplay` → Pulse → `imx-spdif`)
 - Play / pause / seek / next / prev / volume / delete

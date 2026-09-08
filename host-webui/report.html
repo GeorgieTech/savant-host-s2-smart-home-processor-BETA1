@@ -29,7 +29,7 @@
         <span class="badge" id="state">Idle</span>
       </div>
       <div class="meta" id="rpt-byline"></div>
-      <p class="hint" id="hint">Play a track, then Research uses MusicBrainz and Wikipedia to write a clean story you can later post on Instagram. Local tags work offline. Deleting the track also deletes this report.</p>
+      <p class="hint" id="hint">Play a track, then Research gathers MusicBrainz and Wikipedia and writes a full essay on what the song means and how it can sit in a life. Local tags work offline. Deleting the track also deletes this report.</p>
       <div class="row center rpt-actions">
         <button class="primary" id="fetchbtn" type="button">Research</button>
         <button class="ghost" id="copycap" type="button">Copy caption</button>
@@ -39,6 +39,10 @@
       <div class="okline" id="ok"></div>
       <article class="rpt-body" id="body" hidden>
         <section class="rpt-story" id="story"></section>
+        <section id="essaywrap" hidden>
+          <h3>Meaning and life</h3>
+          <div class="rpt-essay" id="essay"></div>
+        </section>
         <section>
           <h3>Facts</h3>
           <dl class="rpt-facts" id="facts"></dl>
@@ -114,6 +118,9 @@ function paint(data) {
   $("hint").textContent = data.hint || $("hint").textContent;
   const story = $("story");
   story.innerHTML = (data.story || []).map((p) => "<p>" + esc(p) + "</p>").join("");
+  const essay = data.essay || [];
+  $("essaywrap").hidden = !essay.length;
+  $("essay").innerHTML = essay.map((p) => "<p>" + esc(p) + "</p>").join("");
   const facts = $("facts");
   facts.innerHTML = (data.facts || []).map((f) => "<div><dt>" + esc(f.label) + "</dt><dd>" + esc(f.value) + "</dd></div>").join("");
   $("caption").textContent = data.caption || "";
@@ -130,7 +137,7 @@ async function loadReport(name, fetchRemote) {
     $("rpt-title").textContent = "Nothing playing";
     $("rpt-byline").textContent = "";
     $("body").hidden = true;
-    $("hint").textContent = "Play a track, then Research uses MusicBrainz and Wikipedia to write a clean story you can later post on Instagram.";
+    $("hint").textContent = "Play a track, then Research gathers facts and writes a meaning-and-life essay for later Instagram posts.";
     return;
   }
   let data;
@@ -145,7 +152,7 @@ $("fetchbtn").addEventListener("click", async () => {
   const name = playName || (last.player && last.player.name);
   if (!name) { $("err").textContent = "Nothing playing"; return; }
   $("fetchbtn").disabled = true;
-  $("ok").textContent = "Researching MusicBrainz and Wikipedia…";
+  $("ok").textContent = "Researching the track and writing the essay…";
   $("err").textContent = "";
   try {
     await loadReport(name, true);

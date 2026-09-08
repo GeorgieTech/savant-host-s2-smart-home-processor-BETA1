@@ -1090,11 +1090,16 @@ body.job-busy .tabbar::before {
   color: var(--muted);
   font-weight: 650;
 }
-.rpt-story p {
+.rpt-story p,
+.rpt-essay p {
   margin: 0 0 12px;
   font-size: 16px;
   line-height: 1.55;
   color: var(--bone);
+}
+.rpt-essay p {
+  font-size: 15px;
+  line-height: 1.62;
 }
 .rpt-facts {
   margin: 0;

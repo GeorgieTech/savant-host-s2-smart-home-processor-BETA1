@@ -95,9 +95,12 @@ class ReportAssembleTests(unittest.TestCase):
         self.assertTrue(any(t.startswith("#") for t in data["hashtags"]))
         self.assertIn("Maryland", " ".join(f["value"] for f in data["facts"]))
         self.assertIn("Instagram caption", data["markdown"])
+        self.assertGreaterEqual(len(data.get("essay") or []), 4)
+        self.assertIn("Meaning and life", data["markdown"])
         cached = idx.lookup("glow.wav", fetch=False)
         self.assertTrue(cached["researched"])
         self.assertEqual(plugin.calls, 1)
+        self.assertTrue(cached.get("essay"))
 
     def test_drop_removes_named_cache(self):
         plugin = FakePlugin()
@@ -134,6 +137,11 @@ class ResearchPluginTests(unittest.TestCase):
                     "life-span": {"begin": "1990-01-22"},
                     "tags": [{"name": "rap", "count": 2}],
                 }]}
+            if "explaintext" in url or "prop=extracts" in url:
+                return {"query": {"pages": {"1": {
+                    "title": "Fixture Glow",
+                    "extract": "Fixture Glow is a test recording written in a lab. It explores staying lit when the room goes dark.",
+                }}}}
             if "api.php" in url:
                 return {"query": {"search": [{"title": "Fixture Glow (song)", "snippet": "a song"}]}}
             if "summary" in url:
@@ -150,7 +158,49 @@ class ResearchPluginTests(unittest.TestCase):
         self.assertEqual(data["recording"]["year"], "2018")
         self.assertEqual(data["artist_info"]["begin_area"], "Maryland")
         self.assertTrue(data["wiki_song"]["extract"])
+        self.assertIn("staying lit", data["wiki_song"].get("extract_long") or "")
         self.assertTrue(data["sources"])
+
+
+class EssayTests(unittest.TestCase):
+    def test_fallback_covers_meaning_and_life(self):
+        import essay
+        paras = essay.fallback_essay({
+            "title": "Fixture Glow",
+            "artist": "CRYPT Test",
+            "album": "Glow LP",
+            "year": "2018",
+            "genre": "Electronic",
+            "origin": "Maryland · US",
+            "wiki_song": {"extract": "Fixture Glow explores staying lit when the room goes dark. It is a song about keeping a private fire."},
+            "wiki_artist": {"extract": "CRYPT Test is a fixture artist from Maryland."},
+            "lyrics": "Hold the line\nKeep the glow",
+            "facts": [],
+            "sources": [],
+        })
+        blob = " ".join(paras)
+        self.assertGreaterEqual(len(paras), 5)
+        self.assertIn("Fixture Glow", blob)
+        self.assertIn("life", blob.lower())
+        self.assertIn("Hold the line", blob)
+
+    def test_xai_writer_parses_chat(self):
+        import essay
+        def fake_post(url, body, headers, timeout=55):
+            self.assertIn("Bearer", headers.get("Authorization") or "")
+            self.assertTrue(body.get("messages"))
+            return {"choices": [{"message": {"content": "Para one about meaning.\n\nPara two about a life."}}]}
+        old = os.environ.get("XAI_API_KEY")
+        os.environ["XAI_API_KEY"] = "test-key"
+        try:
+            paras, err = essay.xai_essay({"title": "Glow", "artist": "X"}, post=fake_post)
+        finally:
+            if old is None:
+                os.environ.pop("XAI_API_KEY", None)
+            else:
+                os.environ["XAI_API_KEY"] = old
+        self.assertEqual(err, "")
+        self.assertEqual(len(paras), 2)
 
 
 if __name__ == "__main__":

@@ -16,11 +16,13 @@ import threading
 
 from player import MUSIC_DIR
 from library import CATALOG, UNKNOWN_ARTIST, UNKNOWN_ALBUM, identity_from_path
+from lyrics import LYRICS
 from research import PLUGIN, _clean, _year, sentences
+from essay import write_essay
 
 REPORT_DIR = os.environ.get("CRYPT_REPORTS", "/data/crypt/reports")
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
-CLIENT = "CRYPT/1.1.6"
+CLIENT = "CRYPT/1.1.7"
 
 
 def _join_rel(rel):
@@ -193,6 +195,41 @@ def _caption(ident, story, hashtags):
     return "\n".join(lines).strip()
 
 
+def _lyric_text(rel):
+    try:
+        data = LYRICS.lookup(rel, fetch=False)
+    except Exception:
+        return ""
+    lines = []
+    for row in data.get("lines") or []:
+        text = (row or {}).get("text") or ""
+        if text:
+            lines.append(text)
+        if len(lines) >= 48:
+            break
+    return "\n".join(lines)
+
+
+def _essay_ctx(ident, payload, research):
+    artist_info = (research or {}).get("artist_info") or {}
+    origin = " · ".join(
+        [p for p in (artist_info.get("begin_area"), artist_info.get("country")) if p]
+    )
+    return {
+        "title": payload.get("title"),
+        "artist": payload.get("artist"),
+        "album": payload.get("album"),
+        "year": payload.get("year"),
+        "genre": payload.get("genre"),
+        "origin": origin,
+        "facts": payload.get("facts") or [],
+        "wiki_song": (research or {}).get("wiki_song") or {},
+        "wiki_artist": (research or {}).get("wiki_artist") or {},
+        "lyrics": _lyric_text(ident.get("name") or payload.get("name") or ""),
+        "sources": payload.get("sources") or [],
+    }
+
+
 def _markdown(payload):
     ident = payload
     lines = [
@@ -211,6 +248,12 @@ def _markdown(payload):
         lines.append("")
         lines.append(para)
     lines.append("")
+    if ident.get("essay"):
+        lines.append("## Meaning and life")
+        for para in ident.get("essay") or []:
+            lines.append("")
+            lines.append(para)
+        lines.append("")
     lines.append("## Facts")
     for fact in ident.get("facts") or []:
         lines.append("- **%s:** %s" % (fact.get("label"), fact.get("value")))
@@ -230,9 +273,10 @@ def _markdown(payload):
 
 
 class ReportIndex(object):
-    def __init__(self, plugin=None):
+    def __init__(self, plugin=None, writer=None):
         self.lock = threading.Lock()
         self.plugin = plugin or PLUGIN
+        self.writer = writer
         self.mem = {}
 
     def _track_info(self, rel):
@@ -289,15 +333,21 @@ class ReportIndex(object):
             "year": ident.get("year") or "",
             "length": ident.get("length") or "",
             "story": story,
+            "essay": [],
+            "essay_source": "",
             "facts": facts,
             "hashtags": tags,
             "caption": _caption(ident, story, tags),
             "sources": (research or {}).get("sources") or [],
             "image": (wiki_song or {}).get("image") or (wiki_artist or {}).get("image") or "",
         }
+        if researched:
+            essay, kind = write_essay(_essay_ctx(ident, payload, research), writer=self.writer)
+            payload["essay"] = essay or []
+            payload["essay_source"] = kind or ""
         payload["markdown"] = _markdown(payload)
         if not researched:
-            payload["hint"] = "Local tags only. Research pulls MusicBrainz and Wikipedia for a fuller story."
+            payload["hint"] = "Local tags only. Research pulls MusicBrainz, Wikipedia, and a meaning essay."
         else:
             payload["hint"] = "Cached with this track. Deleting the file also deletes this report."
         return payload
