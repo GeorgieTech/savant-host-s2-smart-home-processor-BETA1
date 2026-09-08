@@ -40,6 +40,7 @@ On a phone: open the UI in Safari/Chrome, then **Add to Home Screen**.
 
 - Hardware: [docs/HOST.md](docs/HOST.md)
 - Deploy: [docs/DEPLOY.md](docs/DEPLOY.md)
+- Future fleet: [docs/CLUSTER.md](docs/CLUSTER.md) — three SHC-2000 workers + one SHC-2000 TOSLINK playback, feeding a separate app. Not built yet.
 
 ## License
 

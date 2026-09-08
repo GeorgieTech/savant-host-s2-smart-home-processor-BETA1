@@ -27,7 +27,7 @@ Do **not** use **192.168.1.40**, **192.168.1.178**, or **192.168.1.180**.
 - Wi-Fi `wlan0` TI wl18xx (unused in V1.1.7)
 - Audio: Pulse sink `alsa_output.platform-sound-spdif.stereo-fallback` (TOSLINK / `imx-spdif`, 24-bit 96 kHz)
 
-This is **not** the SHC-2000 / SHC-S2 Quad (2 GB, 4 cores, `/data` on p3). Do not `dd` images between them.
+This is **not** the SHC-2000 / SHC-S2 Quad (2 GB, 4 cores, `/data` on p3). Do not `dd` images between them. The four-host SHC-2000 farm (three workers + one TOSLINK playback) is planned in [CLUSTER.md](CLUSTER.md). It is not this DualLite.
 
 ## Software image (as converted)
 
