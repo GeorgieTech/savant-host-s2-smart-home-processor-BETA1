@@ -12,6 +12,7 @@ import sys
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 from player import HostPlayer, MUSIC_DIR, EQ_BANDS, clamp_eq
 from ssc import SscHub
@@ -107,6 +108,15 @@ def _save_eq(gains):
 MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD", str(400 * 1024 * 1024)))
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._+\- ()\[\]]+")
+MIME = {
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".opus": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+}
 
 PAGES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -123,6 +133,80 @@ PAGES = {
     "/icon.png": ("icon.png", "image/png"),
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
 }
+
+
+def _qparam(qs, key):
+    return (parse_qs(qs, keep_blank_values=True).get(key) or [""])[0]
+
+
+def _media_path(name):
+    rel = (name or "").replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return None
+    base = os.path.realpath(MUSIC_DIR)
+    full = os.path.realpath(os.path.join(base, rel))
+    if full == base or not full.startswith(base + os.sep):
+        return None
+    if not os.path.isfile(full):
+        return None
+    if os.path.splitext(full)[1].lower() not in AUDIO_EXT:
+        return None
+    return full
+
+
+def _send_media(handler, full, head=False):
+    try:
+        size = os.path.getsize(full)
+    except OSError:
+        handler._send(404, {"ok": False, "error": "not found"})
+        return
+    ext = os.path.splitext(full)[1].lower()
+    mime = MIME.get(ext, "application/octet-stream")
+    start = 0
+    end = size - 1
+    code = 200
+    rng = handler.headers.get("Range") or ""
+    if rng.startswith("bytes=") and size > 0:
+        spec = rng.split("=", 1)[1].split("-")
+        try:
+            if spec[0]:
+                start = int(spec[0])
+            if len(spec) > 1 and spec[1]:
+                end = int(spec[1])
+        except ValueError:
+            handler._send(400, {"ok": False, "error": "bad range"})
+            return
+        end = min(end, size - 1)
+        if start < 0 or start > end:
+            handler.send_response(416)
+            handler.send_header("Content-Range", "bytes */%s" % size)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return
+        code = 206
+    length = end - start + 1
+    handler.send_response(code)
+    handler.send_header("Content-Type", mime)
+    handler.send_header("Content-Length", str(length))
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("Cache-Control", "private, max-age=120")
+    if code == 206:
+        handler.send_header("Content-Range", "bytes %s-%s/%s" % (start, end, size))
+    handler.end_headers()
+    if head:
+        return
+    try:
+        with open(full, "rb") as fh:
+            fh.seek(start)
+            left = length
+            while left > 0:
+                chunk = fh.read(min(65536, left))
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+                left -= len(chunk)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        return
 
 
 def _safe_filename(name):
@@ -413,6 +497,13 @@ class Handler(BaseHTTPRequestHandler):
             if raw_path == "/api/eq":
                 self._send(200, APP.eq_state())
                 return
+            if raw_path == "/api/media":
+                full = _media_path(_qparam(qs, "name"))
+                if not full:
+                    self._send(404, {"ok": False, "error": "not found"})
+                    return
+                _send_media(self, full, head=False)
+                return
             if raw_path == "/api/ssc":
                 force = "fresh=1" in qs or "force=1" in qs
                 self._send(200, HUB.snapshot_all(force=force))
@@ -430,6 +521,38 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             traceback.print_exc()
             self._send(500, {"error": "server"})
+
+    def do_HEAD(self):
+        raw_path = self.path.split("?", 1)[0]
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        try:
+            if raw_path == "/api/media":
+                full = _media_path(_qparam(qs, "name"))
+                if not full:
+                    self._send(404, {"ok": False, "error": "not found"})
+                    return
+                _send_media(self, full, head=True)
+                return
+            if raw_path in PAGES:
+                name, ctype = PAGES[raw_path]
+                path = os.path.realpath(os.path.join(HERE, name))
+                if not path.startswith(os.path.realpath(HERE) + os.sep):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                size = os.path.getsize(path)
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
+        except Exception:
+            traceback.print_exc()
+            self.send_response(500)
+            self.end_headers()
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]

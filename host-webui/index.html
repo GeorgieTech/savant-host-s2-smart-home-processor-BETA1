@@ -30,6 +30,7 @@
       </div>
       <div class="viz-wrap" id="vizwrap">
         <canvas id="viz" aria-label="Playback visualizer"></canvas>
+        <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
       </div>
       <div class="now" id="now">Nothing playing</div>
       <div class="meta" id="meta">0:00 / 0:00</div>
@@ -70,7 +71,19 @@ let viz = {
   lastTs: 0,
   raf: 0,
   vol: 1,
-  mode: "idle"
+  mode: "idle",
+  bars: null,
+  live: false
+};
+const tap = {
+  audio: $("tap"),
+  ctx: null,
+  analyser: null,
+  freq: null,
+  src: null,
+  gain: null,
+  name: "",
+  ok: false
 };
 
 function fmt(sec) {
@@ -105,7 +118,59 @@ async function api(path, body) {
   const r = await fetch(path, opt);
   return r.json();
 }
+function unlockAudio() {
+  if (!tap.audio) return false;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return false;
+  if (!tap.ctx) {
+    tap.ctx = new AC();
+    tap.analyser = tap.ctx.createAnalyser();
+    tap.analyser.fftSize = 512;
+    tap.analyser.smoothingTimeConstant = 0.68;
+    tap.freq = new Uint8Array(tap.analyser.frequencyBinCount);
+    tap.gain = tap.ctx.createGain();
+    tap.gain.gain.value = 0;
+    tap.src = tap.ctx.createMediaElementSource(tap.audio);
+    tap.src.connect(tap.analyser);
+    tap.analyser.connect(tap.gain);
+    tap.gain.connect(tap.ctx.destination);
+  }
+  if (tap.ctx.state === "suspended") tap.ctx.resume();
+  return true;
+}
+function mediaUrl(name) {
+  return "/api/media?name=" + encodeURIComponent(name);
+}
+function syncTap(p, playing) {
+  if (!tap.audio) return;
+  if (!p || !p.name) {
+    tap.name = "";
+    tap.ok = false;
+    try { tap.audio.pause(); } catch (e) {}
+    return;
+  }
+  unlockAudio();
+  if (tap.name !== p.name) {
+    tap.name = p.name;
+    tap.ok = false;
+    tap.audio.src = mediaUrl(p.name);
+    try { tap.audio.load(); } catch (e) {}
+  }
+  const pos = p.position || 0;
+  try {
+    if (Math.abs((tap.audio.currentTime || 0) - pos) > 0.45) {
+      tap.audio.currentTime = pos;
+    }
+  } catch (e) {}
+  if (playing) {
+    const pr = tap.audio.play();
+    if (pr && pr.catch) pr.catch(function () {});
+  } else {
+    try { tap.audio.pause(); } catch (e) {}
+  }
+}
 async function toggle() {
+  unlockAudio();
   const p = last.player || {};
   if (p.playing) await api("/api/pause");
   else if (p.paused) await api("/api/resume");
@@ -113,7 +178,7 @@ async function toggle() {
   else if ((last.count || 0) > 0) await api("/api/next");
   tick();
 }
-async function playName(name) { await api("/api/play", { name }); tick(); }
+async function playName(name) { unlockAudio(); await api("/api/play", { name }); tick(); }
 function setVol(n) {
   viz.vol = Math.max(0, Math.min(100, Number(n))) / 100;
   api("/api/volume", { n: Number(n) });
@@ -126,7 +191,10 @@ $("seek").addEventListener("click", (e) => {
   const t = ((e.clientX - r.left) / r.width) * p.duration;
   api("/api/seek", { seconds: t }).then(tick);
 });
-$("viz").addEventListener("click", () => toggle());
+$("viz").addEventListener("click", () => { unlockAudio(); toggle(); });
+document.addEventListener("pointerdown", unlockAudio);
+tap.audio.addEventListener("playing", () => { tap.ok = true; });
+tap.audio.addEventListener("error", () => { tap.ok = false; });
 
 function sizeViz() {
   const c = $("viz");
@@ -137,6 +205,28 @@ function sizeViz() {
   const th = Math.max(1, Math.floor(h * dpr));
   if (c.width !== tw) c.width = tw;
   if (c.height !== th) c.height = th;
+}
+
+function fftLevels(nBars) {
+  if (!tap.analyser || !tap.freq || !tap.ok) return null;
+  tap.analyser.getByteFrequencyData(tap.freq);
+  const n = tap.freq.length;
+  let energy = 0;
+  const out = new Float32Array(nBars);
+  const minB = 1;
+  const usable = Math.max(1, n - minB);
+  for (let i = 0; i < nBars; i++) {
+    const a = minB + Math.floor(Math.pow(i / nBars, 1.55) * usable);
+    const b = minB + Math.floor(Math.pow((i + 1) / nBars, 1.55) * usable);
+    const lo = Math.min(a, n - 1);
+    const hi = Math.max(lo + 1, Math.min(n, b));
+    let s = 0;
+    for (let k = lo; k < hi; k++) s += tap.freq[k];
+    const v = (s / (hi - lo)) / 255;
+    out[i] = v;
+    energy += v;
+  }
+  return out;
 }
 
 function drawViz(ts) {
@@ -152,15 +242,33 @@ function drawViz(ts) {
   if (viz.mode === "play") viz.clock += dt;
   else if (viz.mode === "idle") viz.clock += dt * 0.18;
 
-  const energy = viz.mode === "play" ? (0.45 + 0.55 * viz.vol)
-    : viz.mode === "pause" ? 0.22
-    : 0.08;
   const bars = 48;
-  const mid = Math.floor(bars / 2);
-  const gap = Math.max(1, w * 0.006);
-  const bw = (w - gap * (bars + 1)) / bars;
+  if (!viz.bars || viz.bars.length !== bars) viz.bars = new Float32Array(bars);
+  const live = fftLevels(bars);
+  viz.live = !!live && viz.mode === "play";
   const seed = viz.seed;
   const t = viz.clock;
+  let energy = 0.08;
+  for (let i = 0; i < bars; i++) {
+    let target;
+    if (live) {
+      target = Math.pow(live[i], 0.85);
+    } else if (viz.mode === "pause") {
+      target = viz.bars[i] * 0.985;
+    } else {
+      const mid = (bars - 1) / 2;
+      const bass = 1 - Math.abs(i - mid) / mid * 0.72;
+      const n1 = 0.5 + 0.5 * Math.sin(t * (1.15 + (seed % 5) * 0.13) + i * 0.37);
+      const n2 = 0.5 + 0.5 * Math.sin(t * (2.4 + (i % 7) * 0.11) + seed * 0.01 + i * 0.19);
+      target = (0.18 + 0.5 * n1 * n2) * bass * (viz.mode === "play" ? 0.28 : 0.1);
+    }
+    const mix = live ? 0.42 : 0.22;
+    viz.bars[i] = viz.bars[i] * (1 - mix) + target * mix;
+    energy += viz.bars[i];
+  }
+  energy = Math.max(0.06, Math.min(1, energy / bars * (live ? 2.2 : 1)));
+  const gap = Math.max(1, w * 0.006);
+  const bw = (w - gap * (bars + 1)) / bars;
 
   ctx.clearRect(0, 0, w, h);
   const g = ctx.createLinearGradient(0, 0, 0, h);
@@ -180,14 +288,8 @@ function drawViz(ts) {
   ctx.fillRect(0, 0, w, h);
 
   for (let i = 0; i < bars; i++) {
-    const d = Math.abs(i - mid) / mid;
-    const bass = 1 - d * 0.72;
-    const n1 = 0.5 + 0.5 * Math.sin(t * (1.15 + (seed % 5) * 0.13) + i * 0.37);
-    const n2 = 0.5 + 0.5 * Math.sin(t * (2.4 + (i % 7) * 0.11) + seed * 0.01 + i * 0.19);
-    const n3 = 0.5 + 0.5 * Math.sin(t * 0.47 + i * 0.08 + seed);
-    let amp = (0.22 + 0.55 * n1 * n2 + 0.23 * n3) * bass * energy;
-    if (viz.mode === "pause") amp *= 0.85;
-    const bh = Math.max(h * 0.04, amp * h * 0.86);
+    const amp = Math.max(0.04, viz.bars[i]);
+    const bh = Math.max(h * 0.04, amp * h * 0.9);
     const x = gap + i * (bw + gap);
     const y = h - bh - h * 0.08;
     const bar = ctx.createLinearGradient(0, y, 0, h);
@@ -258,6 +360,7 @@ async function tick() {
     viz.seed = hashName(p.name || st.host || "crypt");
     viz.mode = playing ? "play" : paused ? "pause" : "idle";
     viz.vol = ((st.volume == null ? 100 : st.volume) / 100);
+    syncTap(p, playing);
     $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
     $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
     $("meta").textContent = fmt(p.position) + " / " + fmt(p.duration);
@@ -279,8 +382,13 @@ async function tick() {
 
 window.addEventListener("resize", sizeViz);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stopViz();
-  else startViz();
+  if (document.hidden) {
+    stopViz();
+    try { tap.audio.pause(); } catch (e) {}
+  } else {
+    startViz();
+    tick();
+  }
 });
 startViz();
 tick();

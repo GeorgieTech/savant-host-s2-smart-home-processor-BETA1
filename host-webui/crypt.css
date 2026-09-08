@@ -161,6 +161,13 @@ canvas#viz {
   height: 196px;
   cursor: pointer;
 }
+audio#tap {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 
 .bar {
   height: 10px;

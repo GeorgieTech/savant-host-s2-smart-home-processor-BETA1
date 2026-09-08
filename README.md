@@ -11,7 +11,7 @@ Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident
 ## What BETA1 does
 
 - Spooky web UI on port 80
-- **Playing** page: now playing, visualizer, transport, and the next 5 tracks in queue
+- **Playing** page: now playing, song-reactive visualizer, transport, and the next 5 tracks in queue
 - **Library** page: upload and the full track list
 - **EQ** page: 10-band TOSLINK equalizer (ffmpeg, same bands as Gigawatt Beta2)
 - Play through the SHR-S2 **TOSLINK** jack (`ffmpeg` → `paplay` → Pulse → `imx-spdif`)
