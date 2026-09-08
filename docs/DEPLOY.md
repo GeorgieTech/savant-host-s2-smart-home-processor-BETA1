@@ -1,4 +1,4 @@
-# Deploy notes — CRYPT V1.0
+# Deploy notes — CRYPT V1.1
 
 Target: **192.168.1.179**. Never 192.168.1.40 / .178 / .180.
 
@@ -53,5 +53,5 @@ Open http://192.168.1.179/
 
 - No `apt`. Yocto image.
 - Python 3.8 stdlib only.
-- DualLite / 1 GB — keep V1.0 to library + TOSLINK + SSC telnet clients. No extra daemons.
+- DualLite / 1 GB — keep V1.1 to library + TOSLINK + SSC telnet clients. No extra daemons.
 - SSC-0014 `192.168.1.136:23`. See [SSC.md](SSC.md).

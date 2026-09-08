@@ -1,4 +1,4 @@
-# Host hardware — 192.168.1.179 (CRYPT V1.0)
+# Host hardware — 192.168.1.179 (CRYPT V1.1)
 
 Factory product: **Savant S2 Host Rack Mountable, SHR-S2-00**.
 
@@ -24,7 +24,7 @@ Do **not** use **192.168.1.40**, **192.168.1.178**, or **192.168.1.180**.
 - **1 GB** RAM + zram swap (~980 MB)
 - eMMC 14.7 GB: `/` on `mmcblk0p7` (3 GB), `/data` on `mmcblk0p2` (7.3 GB)
 - Ethernet `eth0` MAC `00:1A:AE:10:E4:09`
-- Wi-Fi `wlan0` TI wl18xx (unused in V1.0)
+- Wi-Fi `wlan0` TI wl18xx (unused in V1.1)
 - Audio: Pulse sink `alsa_output.platform-sound-spdif.stereo-fallback` (TOSLINK / `imx-spdif`, 24-bit 96 kHz)
 - Paired expander: **SSC-0014** at 192.168.1.136 (7 relays) — see [SSC.md](SSC.md)
 
