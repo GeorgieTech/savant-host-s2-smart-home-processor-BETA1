@@ -1,4 +1,4 @@
-# Deploy notes — CRYPT V1.1.7
+# Deploy notes — CRYPT V1.1.8
 
 Targets: **192.168.1.179** (DualLite S2) and **192.168.1.142** (SHC-S2-00 Quad). Never 192.168.1.40 / .178 / .180.
 
@@ -20,7 +20,7 @@ From the repo root:
 
 ```sh
 scp -O host-webui/index.html host-webui/library.html host-webui/eq.html host-webui/karaoke.html host-webui/report.html host-webui/crypt.css \
-  host-webui/server.py host-webui/player.py host-webui/library.py host-webui/wave.py host-webui/lyrics.py host-webui/research.py host-webui/report.py host-webui/essay.py \
+  host-webui/server.py host-webui/player.py host-webui/library.py host-webui/wave.py host-webui/lyrics.py host-webui/research.py host-webui/report.py host-webui/essay.py host-webui/peers.py \
   host-webui/manifest.webmanifest host-webui/favicon.svg \
   host-webui/icon.png host-webui/apple-touch-icon.png \
   host-webui/pin-hostname.sh \
@@ -35,7 +35,7 @@ Then on the host, as root via `sudo env bash`:
 mkdir -p /data/www /data/music
 chown RPM:RPM /data/www /data/music
 cp /tmp/index.html /tmp/library.html /tmp/eq.html /tmp/karaoke.html /tmp/report.html /tmp/crypt.css \
-  /tmp/server.py /tmp/player.py /tmp/library.py /tmp/wave.py /tmp/lyrics.py /tmp/research.py /tmp/report.py /tmp/essay.py /tmp/pin-hostname.sh \
+  /tmp/server.py /tmp/player.py /tmp/library.py /tmp/wave.py /tmp/lyrics.py /tmp/research.py /tmp/report.py /tmp/essay.py /tmp/peers.py /tmp/pin-hostname.sh \
   /tmp/manifest.webmanifest /tmp/favicon.svg /tmp/icon.png /tmp/apple-touch-icon.png \
   /data/www/
 chmod +x /data/www/pin-hostname.sh /data/www/server.py

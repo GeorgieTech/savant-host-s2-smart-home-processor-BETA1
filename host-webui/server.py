@@ -19,6 +19,7 @@ from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
 from lyrics import LYRICS
 from report import REPORTS
+from peers import PEERS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
@@ -195,12 +196,25 @@ def _safe_filename(name):
     return name[:180]
 
 
-def _library():
-    return CATALOG.tracks()
+def _library(local_only=False):
+    local = CATALOG.tracks()
+    if local_only or not PEERS.config().get("shelves"):
+        self_id = PEERS.config().get("id")
+        out = []
+        for t in local:
+            row = dict(t)
+            row["owner"] = self_id
+            row["local"] = True
+            row["available"] = True
+            out.append(row)
+        return out
+    return PEERS.merge(local)
 
 
-def _library_payload():
-    tracks = _library()
+def _library_payload(local_only=False):
+    tracks = _library(local_only=local_only)
+    peer = PEERS.snapshot()
+    peer["error"] = PEERS.error
     return {
         "ok": True,
         "tracks": tracks,
@@ -208,6 +222,7 @@ def _library_payload():
         "scanning": bool(CATALOG.scanning),
         "playlists": PLAYLISTS.list([t["name"] for t in tracks]),
         "genres": list(GENRES),
+        "peer": peer,
     }
 
 
@@ -237,7 +252,7 @@ def _json_body(handler):
 def _playlist_action(body):
     action = str(body.get("action") or "").strip().lower()
     pid = str(body.get("id") or "").strip()
-    names = CATALOG.names()
+    names = [t["name"] for t in _library()]
     if action == "create":
         pl = PLAYLISTS.create(body.get("name"))
         return {"ok": True, "playlist": pl, "playlists": PLAYLISTS.list(names)}
@@ -327,6 +342,7 @@ class CryptApp(object):
             "eq": eq,
             "eq_preset": _match_preset(eq),
             "disk": _disk(),
+            "peer": PEERS.snapshot(),
         }
 
     def clock(self):
@@ -397,8 +413,30 @@ class CryptApp(object):
         self.player.set_eq(eq)
         return self.eq_state()
 
+    def _ensure_local(self, name):
+        rel = (name or "").replace("\\", "/").lstrip("/")
+        full = os.path.join(MUSIC_DIR, rel)
+        if rel and os.path.isfile(full):
+            return True
+        owner = ""
+        with self.lock:
+            for t in self.tracks:
+                if t.get("name") == rel:
+                    owner = t.get("owner") or ""
+                    break
+        if not PEERS.config().get("shelves"):
+            return os.path.isfile(full)
+        ok = PEERS.ensure(rel, owner=owner)
+        if ok:
+            self.refresh()
+        else:
+            self.player.error = "could not copy from shelf"
+        return ok
+
     def play_name(self, name, start=0.0, order=None):
         self.refresh()
+        if not self._ensure_local(name):
+            return False
         with self.lock:
             names = [t["name"] for t in self.tracks]
             name_set = set(names)
@@ -438,6 +476,8 @@ class CryptApp(object):
         return self.play_name(pl["tracks"][0], order=pl["tracks"])
 
     def _start_name(self, name, start=0.0, nxt=""):
+        if not self._ensure_local(name):
+            return False
         ok = self.player.play(name, start=start)
         if ok:
             WAVES.ensure(name, front=True)
@@ -592,7 +632,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if raw_path == "/api/library":
                 APP.refresh()
-                self._send(200, _library_payload())
+                local_only = _qparam(qs, "local") in ("1", "true", "yes")
+                self._send(200, _library_payload(local_only=local_only))
+                return
+            if raw_path == "/api/peers":
+                snap = PEERS.snapshot()
+                snap["ok"] = True
+                snap["error"] = PEERS.error
+                self._send(200, snap)
                 return
             if raw_path == "/api/playlists":
                 tracks = _library()

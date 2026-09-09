@@ -36,7 +36,7 @@
     </div>
     <section class="card">
       <h2>Upload</h2>
-      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this host and play out TOSLINK.</p>
+      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Uploads stay on this host. A shelf host can list another host’s library without keeping those files.</p>
       <div class="drop" id="drop">
         Drop files here, or
         <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
@@ -50,6 +50,7 @@
           <button type="button" class="ghost" id="btn-manage">Manage</button>
         </div>
       </div>
+      <p class="hint" id="shelf-hint" hidden></p>
       <div class="manage-bar hidden" id="manage-bar">
         <p class="hint" id="manage-hint">Select tracks to delete, or edit artist, album, and genre.</p>
         <div class="row">
@@ -185,6 +186,8 @@ async function playList(list, start) {
   const names = (list || []).map((t) => t.name).filter(Boolean);
   if (!names.length) return;
   const name = start || names[0];
+  const row = (list || []).filter((t) => t.name === name)[0];
+  if (row && row.local === false) $("err").textContent = "Copying from shelf…";
   await api("/api/play", { name: name, order: names });
   tick();
 }
@@ -364,7 +367,9 @@ function rowManage(t) {
 function rowTrack(t, opts) {
   const li = document.createElement("li");
   if (t.name === playingName()) li.className = "on";
-  const sub = [t.artist, t.album].filter(Boolean).join(" · ");
+  const bits = [t.artist, t.album].filter(Boolean);
+  if (t.local === false) bits.push("on shelf");
+  const sub = bits.join(" · ");
   li.innerHTML = "<div class='grow'><div class='name'>" + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
   if (!(opts && opts.noAdd)) {
     const add = document.createElement("button");
@@ -378,10 +383,12 @@ function rowTrack(t, opts) {
     rm.onclick = (e) => opts.remove(t.name, e);
     li.appendChild(rm);
   } else {
-    const del = document.createElement("button");
-    del.textContent = "Delete";
-    del.onclick = (e) => delName(t.name, e);
-    li.appendChild(del);
+    if (t.local !== false) {
+      const del = document.createElement("button");
+      del.textContent = "Delete";
+      del.onclick = (e) => delName(t.name, e);
+      li.appendChild(del);
+    }
   }
   li.onclick = () => playList(opts && opts.order ? opts.order : viewTracks(), t.name);
   return li;
@@ -515,7 +522,7 @@ function render() {
       actions.appendChild(play);
     }
     list.forEach((t) => ul.appendChild(rowTrack(t, { order: list })));
-    if (!tracks().length) ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above</span></li>";
+    if (!tracks().length) ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above, or wait for the shelf host</span></li>";
     else if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No tracks match</span></li>";
   }
 }
@@ -721,7 +728,18 @@ async function tick(force) {
     last = Object.assign({}, st, lib);
     if (lib.genres) fillGenres(lib.genres);
     const p = st.player || {};
-    $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.model || "SHR-S2") + " · TOSLINK");
+    const peer = lib.peer || st.peer || {};
+    const shelves = peer.shelves || [];
+    $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.host || st.model || "SHR-S2") + " · TOSLINK");
+    const shelfHint = $("shelf-hint");
+    if (shelves.length) {
+      const label = shelves.map((s) => s.id || s.url).join(", ");
+      shelfHint.hidden = false;
+      shelfHint.textContent = "Showing the shelf on " + label + ". Files stay there. Play copies a track here first.";
+      if (peer.error) $("err").textContent = peer.error;
+    } else {
+      shelfHint.hidden = true;
+    }
     const d = lib.disk || st.disk || {};
     const n = (lib.tracks || []).length;
     const scan = lib.scanning ? " · reading tags" : "";

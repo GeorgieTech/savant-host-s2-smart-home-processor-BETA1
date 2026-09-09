@@ -24,7 +24,7 @@ Do **not** use **192.168.1.40**, **192.168.1.178**, or **192.168.1.180**. Do not
 - Audio: Pulse sink `alsa_output.platform-sound-spdif.stereo-fallback` (TOSLINK / `imx-spdif`)
 - Python 3.8.17 stdlib, ffmpeg 4.2.2, paplay / Pulse 13
 
-Converted 2026-09-09: Savant `startupManager` + `nginx` masked, default `multi-user.target`, `crypt-hostname` / `crypt-pulse` / `crypt-web` enabled. Library is empty (`/data/music`) until tracks are copied. Caches stay on this box under `/data/crypt`.
+Converted 2026-09-09: Savant `startupManager` + `nginx` masked, default `multi-user.target`, `crypt-hostname` / `crypt-pulse` / `crypt-web` enabled. Library listing is the DualLite shelf at **192.168.1.179** (`/data/crypt/peers.json`). Files stay on `.179`. Play on this box copies a track here first. Caches stay under `/data/crypt`.
 
 Live UI: [http://192.168.1.142/](http://192.168.1.142/)
 

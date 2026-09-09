@@ -88,7 +88,7 @@ Playback’s Library page lists the **fleet catalog** (union of all workers), no
 | `present_on_play` | Whether playback currently has a hot copy |
 | `available` | Owner is up; otherwise show the row as unplayable, not a ghost |
 
-Today `GET /api/library` is a local scan. The funnel app (or a later CRYPT endpoint) is the source of truth for the union view. Playback `play_name()` still requires the file to exist locally **after** the copy lands and the catalog refresh sees it.
+V1.1.8: `GET /api/library` on a viewer host merges shelves from `/data/crypt/peers.json` (with `?local=1` so shelves do not recurse). Play copies the file from the owner via `GET /api/media` then runs local ffmpeg. The SHC-2000 at `.142` lists DualLite `.179` this way; files stay on `.179`.
 
 ### Copy-then-play
 
