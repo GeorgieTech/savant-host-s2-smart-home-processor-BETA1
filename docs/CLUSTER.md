@@ -1,6 +1,6 @@
 # Future plan — four SHC-2000 CRYPT engines
 
-Status: **plan + first chassis**. Live DualLite mule remains **192.168.1.179**. First SHC-2000 is converted at **192.168.1.142** (same CRYPT V1.1.7 UI, empty library). Three more Quad hosts are not on the LAN yet. The library model below (shard on workers, hot cache on playback) is still the target.
+Status: **plan + first chassis**. Live DualLite mule remains **192.168.1.179**. First SHC-2000 is converted at **192.168.1.142** (same CRYPT V1.1.7 UI, empty library). Three more Quad hosts are not on the LAN yet. The library model below (shard on workers, hot cache on playback) is still the target. Two live chassis already link over the LAN; the wire they should speak is [PEER-PROTOCOL.md](PEER-PROTOCOL.md) (multicast CRYPT/1, not a second app yet).
 
 Goal: three SHC-2000 hosts are **library + job workers**. A fourth SHC-2000 is the **TOSLINK playback cache** — it lists the whole fleet library, but only keeps a few files on its own eMMC while they are about to play, playing, or just played. A **separate application** (not this DualLite UI) sits in front, owns the fleet catalog, copies bytes when needed, fans research jobs out, and consumes the JSON those four hosts produce.
 

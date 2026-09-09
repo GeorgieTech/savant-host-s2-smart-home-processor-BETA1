@@ -16,11 +16,11 @@ SSH user: `RPM`. Do not commit the password. `scp -O` from modern macOS.
 
 Savant images on the eMMC are not deleted.
 
-From the repo root:
+From the repo root. Peer/Unison wire: [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
 ```sh
 scp -O host-webui/index.html host-webui/library.html host-webui/eq.html host-webui/karaoke.html host-webui/report.html host-webui/settings.html host-webui/crypt.css \
-  host-webui/server.py host-webui/player.py host-webui/library.py host-webui/wave.py host-webui/lyrics.py host-webui/research.py host-webui/report.py host-webui/essay.py host-webui/peers.py host-webui/unison.py \
+  host-webui/server.py host-webui/player.py host-webui/library.py host-webui/wave.py host-webui/lyrics.py host-webui/research.py host-webui/report.py host-webui/essay.py host-webui/peers.py host-webui/unison.py host-webui/crypt_wire.py \
   host-webui/manifest.webmanifest host-webui/favicon.svg \
   host-webui/icon.png host-webui/apple-touch-icon.png \
   host-webui/pin-hostname.sh \
@@ -35,7 +35,7 @@ Then on the host, as root via `sudo env bash`:
 mkdir -p /data/www /data/music
 chown RPM:RPM /data/www /data/music
 cp /tmp/index.html /tmp/library.html /tmp/eq.html /tmp/karaoke.html /tmp/report.html /tmp/settings.html /tmp/crypt.css \
-  /tmp/server.py /tmp/player.py /tmp/library.py /tmp/wave.py /tmp/lyrics.py /tmp/research.py /tmp/report.py /tmp/essay.py /tmp/peers.py /tmp/unison.py /tmp/pin-hostname.sh \
+  /tmp/server.py /tmp/player.py /tmp/library.py /tmp/wave.py /tmp/lyrics.py /tmp/research.py /tmp/report.py /tmp/essay.py /tmp/peers.py /tmp/unison.py /tmp/crypt_wire.py /tmp/pin-hostname.sh \
   /tmp/manifest.webmanifest /tmp/favicon.svg /tmp/icon.png /tmp/apple-touch-icon.png \
   /data/www/
 chmod +x /data/www/pin-hostname.sh /data/www/server.py

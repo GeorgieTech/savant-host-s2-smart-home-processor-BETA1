@@ -24,6 +24,7 @@ except ImportError:
     from urllib2 import Request, urlopen
 
 from player import MUSIC_DIR
+import crypt_wire
 
 VERSION = "1.1.10"
 PEERS_FILE = os.environ.get("CRYPT_PEERS", "/data/crypt/peers.json")
@@ -392,6 +393,12 @@ def _merge_host(dst, src):
         out[flag] = bool(out.get(flag) or src.get(flag))
     if int(src.get("tracks") or 0) > int(out.get("tracks") or 0):
         out["tracks"] = int(src.get("tracks") or 0)
+    try:
+        lv = int(src.get("libver") or 0)
+        if lv:
+            out["libver"] = lv
+    except (TypeError, ValueError):
+        pass
     rtt = src.get("rtt_ms")
     if rtt is not None and (out.get("rtt_ms") is None or rtt < out["rtt_ms"]):
         out["rtt_ms"] = rtt
@@ -446,6 +453,8 @@ class PeerIndex(object):
         self.beacon_ok = False
         self.beacon_error = ""
         self.error = ""
+        self._own_libver = 0
+        self._own_tracks = 0
         self._load_seen()
         self._load_hot()
 
@@ -462,6 +471,11 @@ class PeerIndex(object):
         for shelf in cfg.get("shelves") or []:
             rows.append({"id": shelf["id"], "url": shelf["url"], "uid": shelf.get("uid") or ""})
         return {"id": cfg.get("id"), "shelves": rows}
+
+    def note_local_catalog(self, tracks):
+        self._own_libver = crypt_wire.libver(tracks)
+        self._own_tracks = len(tracks or [])
+        return self._own_libver
 
     def hello(self, extra=None):
         me = identity()
@@ -660,7 +674,13 @@ class PeerIndex(object):
             "online": True,
             "last_seen": now if now is not None else time.time(),
             "via": ["beacon"],
+            "tracks": payload.get("tracks") or 0,
         })
+        if host is not None:
+            try:
+                host["libver"] = int(payload.get("libver") or 0)
+            except (TypeError, ValueError):
+                host["libver"] = 0
         self._remember(host)
         return host
 
@@ -669,7 +689,19 @@ class PeerIndex(object):
         if not url:
             return [], "no url"
         now = time.time()
+        host = urlparse(url).hostname or ""
+        announced = None
+        with self.lock:
+            for row in self._seen.values():
+                if row.get("url") == url or row.get("ip") == host:
+                    try:
+                        announced = int(row.get("libver") or 0) or None
+                    except (TypeError, ValueError):
+                        announced = None
+                    break
         hit = self._remote.get(url)
+        if hit and announced and hit[3] == announced and not hit[2]:
+            return hit[1], ""
         ttl = 8
         if hit and now - hit[0] < (2 if hit[2] else ttl):
             return hit[1], hit[2]
@@ -688,7 +720,8 @@ class PeerIndex(object):
                     tracks, err = [], "bad tracks"
         except Exception as exc:
             tracks, err = [], str(exc)
-        self._remote[url] = (now, tracks, err)
+        fingerprint = crypt_wire.libver(tracks) if tracks else (announced or 0)
+        self._remote[url] = (now, tracks, err, fingerprint)
         return tracks, err
 
     def url_for_owner(self, owner):
@@ -1142,16 +1175,34 @@ class PeerIndex(object):
             "model": me["model"],
         }, separators=(",", ":")).encode("utf-8")
 
+    def _beacon_bin(self, seq):
+        me = identity()
+        cfg = self.config()
+        linked = bool(cfg.get("shelves"))
+        return crypt_wire.encode_beacon(
+            me.get("uid") or "",
+            seq,
+            ip=me.get("ip") or "",
+            model=me.get("model") or "",
+            version=VERSION,
+            tracks=int(self._own_tracks or 0),
+            libhash=int(self._own_libver or 0),
+            linked=linked,
+        )
+
     def _beacon_loop(self):
         last_send = 0
+        seq = crypt_wire.now_seq()
         while self._alive:
             now = time.time()
             sock = self._sock
             if sock is None:
                 time.sleep(0.5)
                 continue
-            if now - last_send >= 4:
+            if now - last_send >= 2:
+                seq = (seq + 1) & 0xFFFFFFFF
                 try:
+                    sock.sendto(self._beacon_bin(seq), (crypt_wire.GROUP, BEACON_PORT))
                     sock.sendto(self._beacon_payload(), (BROADCAST, BEACON_PORT))
                     self.beacon_ok = True
                     self.beacon_error = ""
@@ -1166,9 +1217,18 @@ class PeerIndex(object):
                 self.beacon_error = str(exc)
                 time.sleep(0.5)
                 continue
-            try:
-                payload = json.loads(data.decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
+            payload = crypt_wire.decode_any(data)
+            if not payload:
+                continue
+            kind = payload.get("kind") or "beacon"
+            if kind == "clock":
+                try:
+                    from unison import UNISON
+                    UNISON.note_clock(payload, addr[0] if addr else "")
+                except Exception:
+                    pass
+                continue
+            if kind != "beacon":
                 continue
             self.note_beacon(payload, addr[0] if addr else "")
 
@@ -1182,18 +1242,33 @@ class PeerIndex(object):
         except (OSError, AttributeError):
             pass
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(1.0)
+        sock.settimeout(0.25)
         try:
             sock.bind(("0.0.0.0", BEACON_PORT))
         except OSError as exc:
             self.beacon_error = str(exc)
             sock.close()
             return
+        try:
+            crypt_wire.join_group(sock, iface=_lan_ip() or "0.0.0.0")
+        except OSError as exc:
+            self.beacon_error = str(exc)
         self._sock = sock
         self._alive = True
         self._thread = threading.Thread(target=self._beacon_loop, name="crypt-beacon")
         self._thread.daemon = True
         self._thread.start()
+
+    def send_dgram(self, blob, dest=None):
+        sock = self._sock
+        if sock is None or not blob:
+            return False
+        dest = dest or (crypt_wire.GROUP, BEACON_PORT)
+        try:
+            sock.sendto(blob, dest)
+            return True
+        except Exception:
+            return False
 
     def stop(self):
         self._alive = False
