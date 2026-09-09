@@ -1,6 +1,6 @@
 # CRYPT/1 — host-to-host protocol (deploy this)
 
-Status: **implement and install on both live hosts together**. Built against V1.1.10 (`67c1db5`) after debugging the two-host link.
+Status: **V1.1.11 ships this protocol.** Built against V1.1.10 (`67c1db5`) after debugging the two-host link. Install on **both** live hosts in the same session.
 
 Targets: **192.168.1.179** (DualLite mule, UID `001AAE10E4090000`) and **192.168.1.142** (SHC-2000 Quad, UID `001AAE0739DB0000`). Never **.40 / .178 / .180**.
 

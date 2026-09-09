@@ -252,7 +252,7 @@ class LinkTests(unittest.TestCase):
             self.assertEqual(len(cfg["shelves"]), 1)
             self.assertEqual(cfg["shelves"][0]["url"], "http://192.168.1.179")
             self.assertEqual(cfg["shelves"][0]["uid"], "001AAE10E4090000")
-            ok, err = idx.unlink("001AAE10E4090000")
+            ok, err = idx.unlink("001AAE10E4090000", notify=False)
             self.assertTrue(ok, err)
             self.assertEqual(peers.load_config(path)["shelves"], [])
         finally:

@@ -239,6 +239,7 @@ class Library(object):
                 rec = {
                     "name": item["name"],
                     "size": item["size"],
+                    "mtime": item["mtime"],
                     "title": ident["title"],
                     "artist": ident["artist"],
                     "album": ident["album"],

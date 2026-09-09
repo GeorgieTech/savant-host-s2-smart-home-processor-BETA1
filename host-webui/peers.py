@@ -4,8 +4,8 @@
 A viewer host lists another host's catalog over HTTP. Files stay on the
 shelf. Play copies the track onto this box first (no NAS, no ffmpeg HTTP).
 
-Discovery: UDP beacon on the lab LAN plus HTTP hello. Hosts are unique by
-Savant UID, so a third chassis appears as its own row. Python 3.8 stdlib only.
+Discovery: CRYPT/1 multicast on 239.18.20.1:41880 plus JSON broadcast
+fallback and HTTP hello. Hosts are unique by Savant UID. Python 3.8 stdlib only.
 """
 from __future__ import print_function
 
@@ -26,7 +26,7 @@ except ImportError:
 from player import MUSIC_DIR
 import crypt_wire
 
-VERSION = "1.1.10"
+VERSION = "1.1.11"
 PEERS_FILE = os.environ.get("CRYPT_PEERS", "/data/crypt/peers.json")
 SEEN_FILE = os.environ.get("CRYPT_SEEN", "/data/crypt/seen.json")
 HOT_FILE = os.environ.get("CRYPT_HOT", "/data/crypt/hot.json")
@@ -159,11 +159,21 @@ def _lan_ip():
     return ""
 
 
+_IDENT_TTL = 5.0
+_ident_cache = {"t": 0.0, "row": None}
+
+
 def identity():
+    now = time.time()
+    hit = _ident_cache.get("row")
+    if hit and now - float(_ident_cache.get("t") or 0) < _IDENT_TTL:
+        row = dict(hit)
+        row["version"] = VERSION
+        return row
     host = socket.gethostname() or "crypt"
     ip = _lan_ip()
     uid = _uid_from(host)
-    return {
+    row = {
         "crypt": 1,
         "id": _self_id(),
         "uid": uid,
@@ -173,6 +183,9 @@ def identity():
         "model": _model(),
         "version": VERSION,
     }
+    _ident_cache["t"] = now
+    _ident_cache["row"] = dict(row)
+    return row
 
 
 def load_config(path=None):
@@ -700,7 +713,13 @@ class PeerIndex(object):
                         announced = None
                     break
         hit = self._remote.get(url)
-        if hit and announced and hit[3] == announced and not hit[2]:
+        cached_ver = None
+        if hit:
+            try:
+                cached_ver = hit[3]
+            except (IndexError, TypeError):
+                cached_ver = None
+        if hit and announced and cached_ver == announced and not hit[2]:
             return hit[1], ""
         ttl = 8
         if hit and now - hit[0] < (2 if hit[2] else ttl):
@@ -1173,6 +1192,8 @@ class PeerIndex(object):
             "host": me["host"],
             "ip": me["ip"],
             "model": me["model"],
+            "tracks": int(self._own_tracks or 0),
+            "libver": int(self._own_libver or 0),
         }, separators=(",", ":")).encode("utf-8")
 
     def _beacon_bin(self, seq):

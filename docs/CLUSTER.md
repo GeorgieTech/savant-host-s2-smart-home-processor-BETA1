@@ -94,6 +94,8 @@ V1.1.9: Settings → **On the LAN** lists every CRYPT chassis we hear, unique by
 
 V1.1.10: A link is two-way (unison catalog). Each library row is stamped with the chassis that holds the file (`home_stamp`). Play still copies onto the listening host, then local ffmpeg → TOSLINK. Optional **Unison TOSLINK** fans Play/Pause/Seek/Next to linked hosts; the follower steers its Time Clock toward the conductor’s heard clock. No streaming.
 
+V1.1.11: CRYPT/1 multicast on `239.18.20.1:41880` (binary beacon + Unison CLOCK at 20 Hz). JSON broadcast stays as fallback. Library merge skips HTTP when the advertised **libver** matches. See [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
+
 ### Copy-then-play
 
 1. User picks a row owned by worker B.
