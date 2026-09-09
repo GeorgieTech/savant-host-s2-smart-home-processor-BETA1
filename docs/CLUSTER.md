@@ -90,6 +90,8 @@ Playback’s Library page lists the **fleet catalog** (union of all workers), no
 
 V1.1.8: `GET /api/library` on a viewer host merges shelves from `/data/crypt/peers.json` (with `?local=1` so shelves do not recurse). Play copies the file from the owner via `GET /api/media` then runs local ffmpeg. The SHC-2000 at `.142` lists DualLite `.179` this way; files stay on `.179`.
 
+V1.1.9: Settings → **On the LAN** lists every CRYPT chassis we hear, unique by Savant UID. UDP beacon on port 41880 plus `GET /api/hello`. **Live** = answering. **Linked** = this host lists it as a shelf. A third host shows up as its own blade; Link as shelf writes `peers.json`. `.40` / `.178` / `.180` never appear.
+
 ### Copy-then-play
 
 1. User picks a row owned by worker B.

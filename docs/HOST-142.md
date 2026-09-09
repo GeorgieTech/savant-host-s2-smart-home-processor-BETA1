@@ -1,6 +1,6 @@
 # Host hardware — 192.168.1.142 (first SHC-2000)
 
-Factory product: **Savant SHC-S2-00** (SHC-2000 class Quad). Same CRYPT web UI as the DualLite S2 at **192.168.1.179** (V1.1.7).
+Factory product: **Savant SHC-S2-00** (SHC-2000 class Quad). Same CRYPT web UI as the DualLite S2 at **192.168.1.179** (V1.1.9).
 
 Do **not** use **192.168.1.40**, **192.168.1.178**, or **192.168.1.180**. Do not `dd` the DualLite S2 eMMC onto this chassis.
 

@@ -96,5 +96,141 @@ class EnsureTests(unittest.TestCase):
             shutil.rmtree(folder, ignore_errors=True)
 
 
+class IdentityTests(unittest.TestCase):
+    def test_uid_from_hostname(self):
+        self.assertEqual(peers._uid_from("crypt-001aae10e4090000"), "001AAE10E4090000")
+        self.assertEqual(peers._uid_from("sav-001aae0739db0000"), "001AAE0739DB0000")
+        self.assertEqual(peers._uid_from("192.168.1.111"), "")
+        self.assertEqual(peers._uid_from("001AAE10E4090000"), "001AAE10E4090000")
+
+
+class RosterTests(unittest.TestCase):
+    def test_three_hosts_stay_unique_by_uid(self):
+        folder = tempfile.mkdtemp(prefix="crypt-peers-")
+        try:
+            path = os.path.join(folder, "peers.json")
+            seen = os.path.join(folder, "seen.json")
+            with open(path, "w") as fh:
+                json.dump({
+                    "id": "crypt-viewer",
+                    "shelves": [{"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179"}],
+                }, fh)
+            idx = peers.PeerIndex(path=path, http=lambda url: (_ for _ in ()).throw(RuntimeError("offline")), seen_path=seen)
+            idx._cfg = load_cfg()
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+                "model": "SHR-S2-00",
+                "v": "1.1.9",
+            }, "192.168.1.179")
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae00abc00000",
+                "uid": "001AAE00ABC00000",
+                "host": "crypt-001aae00abc00000",
+                "model": "SHC-S2-00",
+                "v": "1.1.9",
+            }, "192.168.1.150")
+            rows = idx.roster(probe=False)
+            uids = [r.get("uid") for r in rows if r.get("uid")]
+            self.assertEqual(len(uids), len(set(uids)))
+            by_uid = dict((r["uid"], r) for r in rows if r.get("uid"))
+            shelf = by_uid["001AAE10E4090000"]
+            self.assertTrue(shelf["linked"])
+            self.assertTrue(shelf["online"])
+            third = by_uid["001AAE00ABC00000"]
+            self.assertFalse(third["linked"])
+            self.assertTrue(third["online"])
+            self.assertFalse(third["self"])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_beacon_and_shelf_fold_into_one_blade(self):
+        idx = peers.PeerIndex(path="/no/such/peers.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        idx._cfg = {
+            "id": "crypt-viewer",
+            "shelves": [{"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179", "uid": "001AAE10E4090000"}],
+        }
+        idx.note_beacon({
+            "crypt": 1,
+            "id": "crypt-001aae10e4090000",
+            "uid": "001AAE10E4090000",
+            "host": "crypt-001aae10e4090000",
+        }, "192.168.1.179")
+        rows = [r for r in idx.roster(probe=False) if not r.get("self")]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["linked"])
+        self.assertTrue(rows[0]["online"])
+        self.assertEqual(rows[0]["ip"], "192.168.1.179")
+
+    def test_blocked_beacon_is_ignored(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        self.assertIsNone(idx.note_beacon({"crypt": 1, "id": "nope", "uid": "X"}, "192.168.1.40"))
+        self.assertIsNone(idx.note_beacon({"crypt": 1, "id": "nope", "uid": "X"}, "192.168.1.178"))
+        self.assertEqual(idx.roster(probe=False)[0]["self"], True)
+        self.assertEqual(len(idx.roster(probe=False)), 1)
+
+
+    def test_http_client_without_hello_is_not_a_chassis(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: (_ for _ in ()).throw(RuntimeError("nope")), seen_path="/no/such/seen.json")
+        idx.note_client("192.168.1.111", "CRYPT/1.1.9 (peer)")
+        rows = [r for r in idx.roster(probe=False) if not r.get("self")]
+        self.assertEqual(rows, [])
+
+
+class LinkTests(unittest.TestCase):
+    def test_link_saves_shelf_and_unlink_drops_it(self):
+        folder = tempfile.mkdtemp(prefix="crypt-link-")
+        try:
+            path = os.path.join(folder, "peers.json")
+            seen = os.path.join(folder, "seen.json")
+            with open(path, "w") as fh:
+                json.dump({"id": "crypt-viewer", "shelves": []}, fh)
+
+            def fake(url):
+                self.assertTrue(url.endswith("/api/hello"))
+                return {
+                    "ok": True,
+                    "crypt": 1,
+                    "id": "crypt-001aae10e4090000",
+                    "uid": "001AAE10E4090000",
+                    "host": "crypt-001aae10e4090000",
+                    "ip": "192.168.1.179",
+                    "model": "SHR-S2-00",
+                    "version": "1.1.9",
+                    "shelves": [],
+                    "seen": [],
+                    "tracks": 71,
+                }
+
+            idx = peers.PeerIndex(path=path, http=fake, seen_path=seen)
+            ok, err = idx.link("http://192.168.1.179")
+            self.assertTrue(ok, err)
+            cfg = peers.load_config(path)
+            self.assertEqual(len(cfg["shelves"]), 1)
+            self.assertEqual(cfg["shelves"][0]["url"], "http://192.168.1.179")
+            self.assertEqual(cfg["shelves"][0]["uid"], "001AAE10E4090000")
+            ok, err = idx.unlink("001AAE10E4090000")
+            self.assertTrue(ok, err)
+            self.assertEqual(peers.load_config(path)["shelves"], [])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_link_rejects_forbidden_hosts(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        ok, err = idx.link("http://192.168.1.40")
+        self.assertFalse(ok)
+        self.assertTrue(err)
+
+
+def load_cfg():
+    return {
+        "id": "crypt-viewer",
+        "shelves": [{"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179", "uid": "001AAE10E4090000"}],
+    }
+
+
 if __name__ == "__main__":
     unittest.main()

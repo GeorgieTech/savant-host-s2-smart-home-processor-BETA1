@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""CRYPT host-to-host library shelf.
+"""CRYPT host-to-host library shelf and LAN discovery.
 
 A viewer host lists another host's catalog over HTTP. Files stay on the
 shelf. Play copies the track onto this box first (no NAS, no ffmpeg HTTP).
-Python 3.8 stdlib only.
+
+Discovery: UDP beacon on the lab LAN plus HTTP hello. Hosts are unique by
+Savant UID, so a third chassis appears as its own row. Python 3.8 stdlib only.
 """
 from __future__ import print_function
 
@@ -23,11 +25,18 @@ except ImportError:
 
 from player import MUSIC_DIR
 
+VERSION = "1.1.9"
 PEERS_FILE = os.environ.get("CRYPT_PEERS", "/data/crypt/peers.json")
-CLIENT = "CRYPT/1.1.8 (peer)"
+SEEN_FILE = os.environ.get("CRYPT_SEEN", "/data/crypt/seen.json")
+CLIENT = "CRYPT/%s (peer)" % VERSION
 BLOCKED = ("192.168.1.40", "192.168.1.178", "192.168.1.180")
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
 MAX_COPY = int(os.environ.get("MAX_UPLOAD", str(400 * 1024 * 1024)))
+BEACON_PORT = int(os.environ.get("CRYPT_BEACON", "41880"))
+BEACON_TTL = 12
+PROBE_TTL = 5
+LAN_PREFIX = "192.168.1."
+BROADCAST = "192.168.1.255"
 
 
 def _self_id():
@@ -41,7 +50,7 @@ def _blocked(host):
     for bad in BLOCKED:
         if host == bad or host.endswith(bad):
             return True
-    if host.startswith("192.168.1."):
+    if host.startswith(LAN_PREFIX):
         return False
     return True
 
@@ -62,6 +71,106 @@ def _clean_url(url):
     if port != 80:
         return "http://%s:%s" % (host, port)
     return "http://%s" % host
+
+
+def _valid_uid(s):
+    s = str(s or "").strip().upper().replace(":", "")
+    if len(s) < 12 or len(s) > 16:
+        return ""
+    for ch in s:
+        if ch not in "0123456789ABCDEF":
+            return ""
+    return s
+
+
+def _uid_from(name):
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    for prefix in ("sav-", "crypt-", "gwh-"):
+        if low.startswith(prefix):
+            return _valid_uid(s[len(prefix):])
+    return _valid_uid(s)
+
+
+def _model():
+    for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read().split(b"\x00", 1)[0].decode("utf-8", "replace").strip()
+            if raw:
+                return raw
+        except OSError:
+            pass
+    return os.environ.get("CRYPT_MODEL") or "SHR-S2-00"
+
+
+def _if_ip(name):
+    try:
+        import fcntl
+        import struct
+    except ImportError:
+        return ""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        packed = struct.pack("256s", name.encode("utf-8")[:15])
+        info = fcntl.ioctl(sock.fileno(), 0x8915, packed)
+        return socket.inet_ntoa(info[20:24])
+    except OSError:
+        return ""
+    finally:
+        sock.close()
+
+
+def _lan_ip():
+    names = ["eth0"]
+    try:
+        names.extend(sorted(os.listdir("/sys/class/net")))
+    except OSError:
+        pass
+    seen = set()
+    for name in names:
+        if not name or name in seen or name == "lo" or name.startswith("wlan") or name.startswith("dummy"):
+            continue
+        seen.add(name)
+        ip = _if_ip(name)
+        if ip and ip.startswith(LAN_PREFIX) and not _blocked(ip):
+            return ip
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("192.168.1.1", 1))
+            ip = sock.getsockname()[0]
+        finally:
+            sock.close()
+        if ip and ip.startswith(LAN_PREFIX) and not _blocked(ip):
+            return ip
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip.startswith(LAN_PREFIX) and not _blocked(ip):
+            return ip
+    except OSError:
+        pass
+    return ""
+
+
+def identity():
+    host = socket.gethostname() or "crypt"
+    ip = _lan_ip()
+    uid = _uid_from(host)
+    return {
+        "crypt": 1,
+        "id": _self_id(),
+        "uid": uid,
+        "host": host,
+        "ip": ip,
+        "url": ("http://%s" % ip) if ip else "",
+        "model": _model(),
+        "version": VERSION,
+    }
 
 
 def load_config(path=None):
@@ -90,11 +199,48 @@ def load_config(path=None):
             continue
         seen.add(url)
         sid = str(item.get("id") or urlparse(url).hostname or url)
-        shelves.append({"id": sid, "url": url})
+        shelves.append({"id": sid, "url": url, "uid": str(item.get("uid") or _uid_from(sid))})
     return {
         "id": str(data.get("id") or _self_id()),
         "shelves": shelves,
     }
+
+
+def save_config(cfg, path=None):
+    path = path or PEERS_FILE
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    payload = {
+        "id": str((cfg or {}).get("id") or _self_id()),
+        "shelves": [],
+    }
+    seen = set()
+    for item in (cfg or {}).get("shelves") or []:
+        if isinstance(item, str):
+            item = {"url": item}
+        if not isinstance(item, dict):
+            continue
+        url = _clean_url(item.get("url"))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        sid = str(item.get("id") or urlparse(url).hostname or url)
+        payload["shelves"].append({
+            "id": sid,
+            "url": url,
+            "uid": str(item.get("uid") or _uid_from(sid)),
+        })
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
+    return payload
 
 
 def _http_json(url, timeout=4):
@@ -117,14 +263,160 @@ def _safe_rel(name):
     return rel
 
 
+def _blank_host():
+    return {
+        "id": "",
+        "uid": "",
+        "host": "",
+        "ip": "",
+        "url": "",
+        "model": "",
+        "version": "",
+        "self": False,
+        "online": False,
+        "linked": False,
+        "sees_us": False,
+        "tracks": 0,
+        "playing": False,
+        "now": "",
+        "rtt_ms": None,
+        "last_seen": 0,
+        "via": [],
+        "error": "",
+    }
+
+
+def _as_host(data, **extra):
+    row = _blank_host()
+    src = dict(data or {})
+    src.update(extra)
+    url = _clean_url(src.get("url") or "")
+    ip = str(src.get("ip") or "")
+    if not ip and url:
+        ip = urlparse(url).hostname or ""
+    if ip and _blocked(ip):
+        return None
+    if url and not ip:
+        ip = urlparse(url).hostname or ""
+    hid = str(src.get("id") or src.get("host") or "")
+    uid = _uid_from(src.get("uid") or hid or src.get("host") or "")
+    if not url and ip:
+        url = "http://%s" % ip
+    row["id"] = hid or uid or ip or url
+    row["uid"] = uid
+    row["host"] = str(src.get("host") or hid or "")
+    row["ip"] = ip
+    row["url"] = url
+    row["model"] = str(src.get("model") or "")
+    row["version"] = str(src.get("version") or "")
+    row["self"] = bool(src.get("self"))
+    row["online"] = bool(src.get("online"))
+    row["linked"] = bool(src.get("linked"))
+    row["sees_us"] = bool(src.get("sees_us"))
+    try:
+        row["tracks"] = int(src.get("tracks") or 0)
+    except (TypeError, ValueError):
+        row["tracks"] = 0
+    row["playing"] = bool(src.get("playing"))
+    row["now"] = str(src.get("now") or "")
+    rtt = src.get("rtt_ms")
+    try:
+        row["rtt_ms"] = None if rtt in (None, "") else int(rtt)
+    except (TypeError, ValueError):
+        row["rtt_ms"] = None
+    try:
+        row["last_seen"] = float(src.get("last_seen") or 0)
+    except (TypeError, ValueError):
+        row["last_seen"] = 0
+    via = src.get("via") or []
+    if isinstance(via, str):
+        via = [via]
+    row["via"] = [str(v) for v in via if v]
+    row["error"] = str(src.get("error") or "")
+    return row
+
+
+def _same(a, b):
+    if not a or not b:
+        return False
+    if a.get("uid") and b.get("uid") and a["uid"] == b["uid"]:
+        return True
+    if a.get("id") and b.get("id") and a["id"] == b["id"]:
+        return True
+    if a.get("ip") and b.get("ip") and a["ip"] == b["ip"]:
+        return True
+    if a.get("url") and b.get("url") and a["url"] == b["url"]:
+        return True
+    return False
+
+
+def _merge_host(dst, src):
+    if not dst:
+        return dict(src)
+    if not src:
+        return dst
+    out = dict(dst)
+    for key in ("id", "uid", "host", "ip", "url", "model", "version", "now", "error"):
+        if src.get(key) and (not out.get(key) or key in ("model", "version", "now", "error")):
+            if src.get(key):
+                out[key] = src[key]
+    for flag in ("self", "online", "linked", "sees_us", "playing"):
+        out[flag] = bool(out.get(flag) or src.get(flag))
+    if int(src.get("tracks") or 0) > int(out.get("tracks") or 0):
+        out["tracks"] = int(src.get("tracks") or 0)
+    rtt = src.get("rtt_ms")
+    if rtt is not None and (out.get("rtt_ms") is None or rtt < out["rtt_ms"]):
+        out["rtt_ms"] = rtt
+    out["last_seen"] = max(float(out.get("last_seen") or 0), float(src.get("last_seen") or 0))
+    via = []
+    for item in list(out.get("via") or []) + list(src.get("via") or []):
+        if item and item not in via:
+            via.append(item)
+    out["via"] = via
+    if src.get("error") and not out.get("online"):
+        out["error"] = src.get("error")
+    if out.get("online"):
+        out["error"] = ""
+    return out
+
+
+def _fold_hosts(rows):
+    folded = []
+    for row in rows:
+        if not row:
+            continue
+        hit = None
+        for existing in folded:
+            if _same(existing, row):
+                hit = existing
+                break
+        if hit is None:
+            folded.append(dict(row))
+        else:
+            merged = _merge_host(hit, row)
+            hit.clear()
+            hit.update(merged)
+    return folded
+
+
 class PeerIndex(object):
-    def __init__(self, path=None, http=None):
+    def __init__(self, path=None, http=None, seen_path=None):
         self.path = path or PEERS_FILE
+        self.seen_path = seen_path or SEEN_FILE
         self.http = http or _http_json
         self.lock = threading.Lock()
         self._cfg = load_config(self.path)
         self._remote = {}
+        self._seen = {}
+        self._probe = {}
+        self._candidates = set()
+        self._alive = False
+        self._thread = None
+        self._sock = None
+        self.beacon_ok = False
+        self.beacon_error = ""
         self.error = ""
+        self._load_seen()
 
     def reload(self):
         self._cfg = load_config(self.path)
@@ -137,8 +429,160 @@ class PeerIndex(object):
         cfg = self.config()
         rows = []
         for shelf in cfg.get("shelves") or []:
-            rows.append({"id": shelf["id"], "url": shelf["url"]})
+            rows.append({"id": shelf["id"], "url": shelf["url"], "uid": shelf.get("uid") or ""})
         return {"id": cfg.get("id"), "shelves": rows}
+
+    def hello(self, extra=None):
+        me = identity()
+        hid = self.config().get("id") or me["id"]
+        payload = {
+            "ok": True,
+            "crypt": 1,
+            "id": hid,
+            "uid": me["uid"] or _uid_from(hid),
+            "host": me["host"],
+            "ip": me["ip"],
+            "url": me["url"],
+            "model": me["model"],
+            "version": VERSION,
+            "shelves": self.snapshot().get("shelves") or [],
+            "seen": self.seen_public(),
+        }
+        extra = extra or {}
+        for key in ("tracks", "playing", "now"):
+            if key in extra:
+                payload[key] = extra[key]
+        return payload
+
+    def seen_public(self):
+        now = time.time()
+        out = []
+        with self.lock:
+            rows = list(self._seen.values())
+        for row in rows:
+            if now - float(row.get("last_seen") or 0) > BEACON_TTL * 4:
+                continue
+            if _blocked(row.get("ip") or ""):
+                continue
+            out.append({
+                "id": row.get("id") or "",
+                "uid": row.get("uid") or "",
+                "ip": row.get("ip") or "",
+                "url": row.get("url") or "",
+                "model": row.get("model") or "",
+            })
+            if len(out) >= 12:
+                break
+        return out
+
+    def _load_seen(self):
+        try:
+            with open(self.seen_path, "r") as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            return
+        rows = raw.get("hosts") if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return
+        for item in rows:
+            host = _as_host(item, via=["remembered"])
+            if not host or not host.get("uid"):
+                continue
+            host["online"] = False
+            self._remember(host, persist=False)
+
+    def _persist_seen(self):
+        folder = os.path.dirname(self.seen_path)
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError:
+                return
+        rows = []
+        with self.lock:
+            items = list(self._seen.values())
+        items.sort(key=lambda r: float(r.get("last_seen") or 0), reverse=True)
+        for row in items[:16]:
+            rows.append({
+                "id": row.get("id") or "",
+                "uid": row.get("uid") or "",
+                "ip": row.get("ip") or "",
+                "url": row.get("url") or "",
+                "model": row.get("model") or "",
+                "last_seen": row.get("last_seen") or 0,
+            })
+        tmp = self.seen_path + ".tmp"
+        try:
+            with open(tmp, "w") as fh:
+                json.dump({"hosts": rows}, fh)
+            os.replace(tmp, self.seen_path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def _remember(self, host, persist=True):
+        if not host or host.get("self"):
+            return
+        ip = host.get("ip") or ""
+        if ip and _blocked(ip):
+            return
+        host = dict(host)
+        with self.lock:
+            hit = None
+            for existing in self._seen.values():
+                if _same(existing, host):
+                    hit = existing
+                    break
+            if hit is None:
+                key = host.get("uid") or host.get("id") or host.get("ip") or host.get("url")
+                if not key:
+                    return
+                self._seen[key] = host
+            else:
+                merged = _merge_host(hit, host)
+                hit.clear()
+                hit.update(merged)
+        if persist:
+            self._persist_seen()
+
+    def note_client(self, ip, ua=""):
+        ip = (ip or "").split("%")[0].strip()
+        if _blocked(ip) or not str(ua or "").startswith("CRYPT/"):
+            return
+        me = identity()
+        if ip == me.get("ip"):
+            return
+        with self.lock:
+            self._candidates.add(ip)
+
+    def note_beacon(self, payload, addr_ip, now=None):
+        if not isinstance(payload, dict) or payload.get("crypt") != 1:
+            return None
+        ip = (addr_ip or "").split("%")[0].strip()
+        if _blocked(ip):
+            return None
+        me = identity()
+        uid = _uid_from(payload.get("uid") or payload.get("id") or payload.get("host") or "")
+        if not uid:
+            return None
+        if ip == me.get("ip") or uid == me.get("uid"):
+            return None
+        host = _as_host({
+            "id": payload.get("id"),
+            "uid": uid,
+            "host": payload.get("host"),
+            "ip": ip,
+            "url": "http://%s" % ip,
+            "model": payload.get("model"),
+            "version": payload.get("version") or payload.get("v"),
+            "online": True,
+            "last_seen": now if now is not None else time.time(),
+            "via": ["beacon"],
+        })
+        self._remember(host)
+        return host
 
     def fetch_shelf(self, shelf):
         url = shelf.get("url") or ""
@@ -172,7 +616,7 @@ class PeerIndex(object):
             return ""
         for shelf in cfg.get("shelves") or []:
             host = urlparse(shelf.get("url") or "").hostname or ""
-            if owner in (shelf.get("id"), shelf.get("url"), host):
+            if owner in (shelf.get("id"), shelf.get("url"), host, shelf.get("uid")):
                 return shelf.get("url")
         return ""
 
@@ -284,6 +728,302 @@ class PeerIndex(object):
             except OSError:
                 pass
             return False
+
+    def _points_at_us(self, data, me):
+        if not isinstance(data, dict):
+            return False
+        mine = set(filter(None, [me.get("id"), me.get("uid"), me.get("ip"), me.get("host"), me.get("url")]))
+        for shelf in data.get("shelves") or []:
+            if not isinstance(shelf, dict):
+                continue
+            bits = [shelf.get("id"), shelf.get("uid"), shelf.get("url"), urlparse(shelf.get("url") or "").hostname]
+            for bit in bits:
+                if bit and bit in mine:
+                    return True
+        for seen in data.get("seen") or []:
+            if not isinstance(seen, dict):
+                continue
+            bits = [seen.get("id"), seen.get("uid"), seen.get("ip"), seen.get("url")]
+            for bit in bits:
+                if bit and bit in mine:
+                    return True
+        return False
+
+    def probe_url(self, url, now=None, force=False):
+        url = _clean_url(url)
+        if not url:
+            return None, "bad url"
+        now = now if now is not None else time.time()
+        hit = self._probe.get(url)
+        if not force and hit and now - hit[0] < PROBE_TTL:
+            return hit[1], hit[2]
+        t0 = time.time()
+        try:
+            data = self.http(url + "/api/hello")
+            rtt = int((time.time() - t0) * 1000)
+            if not isinstance(data, dict) or data.get("crypt") != 1:
+                err = "not CRYPT"
+                self._probe[url] = (now, None, err)
+                return None, err
+            me = identity()
+            host = _as_host({
+                "id": data.get("id"),
+                "uid": data.get("uid"),
+                "host": data.get("host"),
+                "ip": urlparse(url).hostname or data.get("ip"),
+                "url": url,
+                "model": data.get("model"),
+                "version": data.get("version"),
+                "tracks": data.get("tracks"),
+                "playing": data.get("playing"),
+                "now": data.get("now"),
+                "online": True,
+                "sees_us": self._points_at_us(data, me),
+                "rtt_ms": rtt,
+                "last_seen": now,
+                "via": ["hello"],
+            })
+            self._remember(host)
+            gossip = []
+            for item in (data.get("seen") or []) + (data.get("shelves") or []):
+                if not isinstance(item, dict):
+                    continue
+                other = _as_host(item, via=["gossip"], last_seen=now)
+                if other and other.get("uid") and not _same(other, _as_host(me, self=True)):
+                    gossip.append(other)
+                    self._remember(other)
+            host["_gossip"] = gossip
+            self._probe[url] = (now, host, "")
+            return host, ""
+        except Exception as exc:
+            err = str(exc)
+            self._probe[url] = (now, None, err)
+            return None, err
+
+    def roster(self, probe=False, extra=None, force=False):
+        now = time.time()
+        me = identity()
+        extra = extra or {}
+        cfg = self.config()
+        self_row = _as_host(me, self=True, online=True, last_seen=now, via=["self"],
+                            tracks=extra.get("tracks") or 0,
+                            playing=extra.get("playing") or False,
+                            now=extra.get("now") or "")
+        self_row["id"] = cfg.get("id") or self_row.get("id")
+        rows = [self_row]
+        for shelf in cfg.get("shelves") or []:
+            rows.append(_as_host(shelf, linked=True, via=["shelf"]))
+        with self.lock:
+            remembered = [dict(v) for v in self._seen.values()]
+        for row in remembered:
+            age = now - float(row.get("last_seen") or 0)
+            row["online"] = age <= BEACON_TTL
+            rows.append(row)
+        urls = []
+        if probe:
+            for row in rows:
+                if row.get("self"):
+                    continue
+                url = row.get("url") or ""
+                if url and url not in urls:
+                    urls.append(url)
+            with self.lock:
+                cands = list(self._candidates)
+            for ip in cands:
+                url = "http://%s" % ip
+                if url not in urls:
+                    urls.append(url)
+            confirmed = set()
+            for url in urls:
+                found, err = self.probe_url(url, now=now, force=force)
+                if found:
+                    rows.append(found)
+                    confirmed.add(urlparse(url).hostname or "")
+                    for item in found.get("_gossip") or []:
+                        rows.append(item)
+                elif err:
+                    host = urlparse(url).hostname or ""
+                    linked = any((r.get("url") == url or r.get("ip") == host) and r.get("linked") for r in rows)
+                    if linked:
+                        rows.append(_as_host({"url": url, "ip": host, "error": err, "via": ["hello"], "online": False}))
+            with self.lock:
+                self._candidates = set(ip for ip in self._candidates if ip not in confirmed)
+        folded = _fold_hosts(rows)
+        out = []
+        for row in folded:
+            row.pop("_gossip", None)
+            if row.get("self"):
+                row["online"] = True
+                row["linked"] = False
+                out.append(row)
+                continue
+            age = now - float(row.get("last_seen") or 0)
+            confirmed = bool(row.get("uid") or row.get("linked") or "beacon" in (row.get("via") or []) or "hello" in (row.get("via") or []))
+            if not confirmed:
+                continue
+            if age <= BEACON_TTL and ("beacon" in (row.get("via") or []) or "hello" in (row.get("via") or [])):
+                row["online"] = True
+            elif age > BEACON_TTL:
+                row["online"] = False
+            out.append(row)
+        out.sort(key=lambda r: (
+            0 if r.get("self") else 1,
+            0 if r.get("linked") else 1,
+            0 if r.get("online") else 1,
+            str(r.get("uid") or r.get("id") or "").lower(),
+        ))
+        return out
+
+    def summary(self, extra=None):
+        hosts = self.roster(probe=False, extra=extra)
+        return {
+            "online": sum(1 for h in hosts if h.get("online")),
+            "linked": sum(1 for h in hosts if h.get("linked") and not h.get("self")),
+            "count": len(hosts),
+        }
+
+    def fleet(self, probe=False, extra=None, force=False):
+        hosts = self.roster(probe=probe, extra=extra, force=force)
+        return {
+            "ok": True,
+            "crypt": 1,
+            "version": VERSION,
+            "self": identity(),
+            "hosts": hosts,
+            "online": sum(1 for h in hosts if h.get("online")),
+            "linked": sum(1 for h in hosts if h.get("linked") and not h.get("self")),
+            "beacon": {
+                "port": BEACON_PORT,
+                "listening": bool(self.beacon_ok),
+                "error": self.beacon_error,
+            },
+            "error": self.error,
+        }
+
+    def link(self, url):
+        url = _clean_url(url)
+        if not url:
+            return False, "blocked or bad url"
+        me = identity()
+        if urlparse(url).hostname in (me.get("ip"), "127.0.0.1"):
+            return False, "cannot link this chassis"
+        found, err = self.probe_url(url, now=time.time())
+        sid = (found or {}).get("id") or urlparse(url).hostname or url
+        uid = (found or {}).get("uid") or _uid_from(sid)
+        cfg = load_config(self.path)
+        shelves = []
+        seen = set()
+        for item in cfg.get("shelves") or []:
+            item_url = item.get("url")
+            if item_url in seen:
+                continue
+            seen.add(item_url)
+            shelves.append(item)
+        if url not in seen:
+            shelves.append({"id": sid, "url": url, "uid": uid})
+        cfg["id"] = cfg.get("id") or me.get("id")
+        cfg["shelves"] = shelves
+        save_config(cfg, self.path)
+        self.reload()
+        if found:
+            found["linked"] = True
+            self._remember(found)
+        return True, ""
+
+    def unlink(self, key):
+        key = str(key or "").strip()
+        if not key:
+            return False, "need id or url"
+        cfg = load_config(self.path)
+        kept = []
+        dropped = False
+        for item in cfg.get("shelves") or []:
+            bits = [item.get("id"), item.get("uid"), item.get("url"), urlparse(item.get("url") or "").hostname]
+            if key in [str(b) for b in bits if b]:
+                dropped = True
+                continue
+            kept.append(item)
+        if not dropped:
+            return False, "not linked"
+        cfg["shelves"] = kept
+        save_config(cfg, self.path)
+        self.reload()
+        return True, ""
+
+    def _beacon_payload(self):
+        me = identity()
+        return json.dumps({
+            "crypt": 1,
+            "v": VERSION,
+            "id": me["id"],
+            "uid": me["uid"],
+            "host": me["host"],
+            "ip": me["ip"],
+            "model": me["model"],
+        }, separators=(",", ":")).encode("utf-8")
+
+    def _beacon_loop(self):
+        last_send = 0
+        while self._alive:
+            now = time.time()
+            sock = self._sock
+            if sock is None:
+                time.sleep(0.5)
+                continue
+            if now - last_send >= 4:
+                try:
+                    sock.sendto(self._beacon_payload(), (BROADCAST, BEACON_PORT))
+                    self.beacon_ok = True
+                    self.beacon_error = ""
+                except Exception as exc:
+                    self.beacon_error = str(exc)
+                last_send = now
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                self.beacon_error = str(exc)
+                time.sleep(0.5)
+                continue
+            try:
+                payload = json.loads(data.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            self.note_beacon(payload, addr[0] if addr else "")
+
+    def start(self):
+        if BEACON_PORT <= 0 or self._alive:
+            return
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (OSError, AttributeError):
+            pass
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(1.0)
+        try:
+            sock.bind(("0.0.0.0", BEACON_PORT))
+        except OSError as exc:
+            self.beacon_error = str(exc)
+            sock.close()
+            return
+        self._sock = sock
+        self._alive = True
+        self._thread = threading.Thread(target=self._beacon_loop, name="crypt-beacon")
+        self._thread.daemon = True
+        self._thread.start()
+
+    def stop(self):
+        self._alive = False
+        sock = self._sock
+        self._sock = None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 PEERS = PeerIndex()

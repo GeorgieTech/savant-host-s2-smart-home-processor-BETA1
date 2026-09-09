@@ -19,7 +19,7 @@ from library import CATALOG, PLAYLISTS, GENRES
 from wave import WAVES
 from lyrics import LYRICS
 from report import REPORTS
-from peers import PEERS
+from peers import PEERS, VERSION, identity
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
@@ -106,6 +106,8 @@ PAGES = {
     "/report.html": ("report.html", "text/html; charset=utf-8"),
     "/eq": ("eq.html", "text/html; charset=utf-8"),
     "/eq.html": ("eq.html", "text/html; charset=utf-8"),
+    "/settings": ("settings.html", "text/html; charset=utf-8"),
+    "/settings.html": ("settings.html", "text/html; charset=utf-8"),
     "/crypt.css": ("crypt.css", "text/css; charset=utf-8"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
@@ -238,6 +240,24 @@ def _disk():
         return {"total": 0, "used": 0, "free": 0}
 
 
+def _hello_extra():
+    snap = APP.player.snapshot()
+    return {
+        "tracks": len(CATALOG.tracks()),
+        "playing": bool(snap.get("playing")),
+        "now": snap.get("name") or "",
+    }
+
+
+def _note_peer(handler):
+    try:
+        ip = handler.client_address[0] if handler.client_address else ""
+        ua = handler.headers.get("User-Agent") or ""
+        PEERS.note_client(ip, ua)
+    except Exception:
+        pass
+
+
 def _json_body(handler):
     n = int(handler.headers.get("Content-Length") or 0)
     if n <= 0:
@@ -330,9 +350,13 @@ class CryptApp(object):
             idx = self.index
         queue, queue_total = self._upcoming(order, tracks, idx, 5)
         eq = clamp_eq(snap.get("eq"))
+        me = identity()
         return {
-            "host": socket.gethostname(),
-            "model": "SHR-S2-00",
+            "host": me.get("host") or socket.gethostname(),
+            "model": me.get("model") or "SHR-S2-00",
+            "uid": me.get("uid") or "",
+            "ip": me.get("ip") or "",
+            "version": VERSION,
             "player": snap,
             "volume": self.player.volume(),
             "index": idx,
@@ -343,6 +367,7 @@ class CryptApp(object):
             "eq_preset": _match_preset(eq),
             "disk": _disk(),
             "peer": PEERS.snapshot(),
+            "fleet": PEERS.summary(),
         }
 
     def clock(self):
@@ -606,6 +631,8 @@ class Handler(BaseHTTPRequestHandler):
         raw_path = self.path.split("?", 1)[0]
         qs = self.path.split("?", 1)[1] if "?" in self.path else ""
         try:
+            if raw_path.startswith("/api/"):
+                _note_peer(self)
             if raw_path in PAGES:
                 name, ctype = PAGES[raw_path]
                 path = os.path.realpath(os.path.join(HERE, name))
@@ -640,6 +667,13 @@ class Handler(BaseHTTPRequestHandler):
                 snap["ok"] = True
                 snap["error"] = PEERS.error
                 self._send(200, snap)
+                return
+            if raw_path == "/api/hello":
+                self._send(200, PEERS.hello(_hello_extra()))
+                return
+            if raw_path == "/api/fleet":
+                probe = _qparam(qs, "probe") in ("1", "true", "yes")
+                self._send(200, PEERS.fleet(probe=probe, extra=_hello_extra()))
                 return
             if raw_path == "/api/playlists":
                 tracks = _library()
@@ -787,6 +821,28 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, payload)
                 return
+            if path == "/api/fleet":
+                _note_peer(self)
+                action = str(body.get("action") or "").strip().lower()
+                if action in ("scan", "refresh", ""):
+                    self._send(200, PEERS.fleet(probe=True, extra=_hello_extra(), force=True))
+                    return
+                if action == "link":
+                    ok, err = PEERS.link(body.get("url") or body.get("ip") or "")
+                    payload = PEERS.fleet(probe=True, extra=_hello_extra())
+                    payload["ok"] = ok
+                    payload["error"] = err
+                    self._send(200 if ok else 400, payload)
+                    return
+                if action == "unlink":
+                    ok, err = PEERS.unlink(body.get("id") or body.get("uid") or body.get("url") or "")
+                    payload = PEERS.fleet(probe=False, extra=_hello_extra())
+                    payload["ok"] = ok
+                    payload["error"] = err
+                    self._send(200 if ok else 400, payload)
+                    return
+                self._send(400, {"ok": False, "error": "need action scan/link/unlink"})
+                return
             self._send(404, {"error": "not found"})
         except Exception:
             traceback.print_exc()
@@ -846,12 +902,17 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(MUSIC_DIR, exist_ok=True)
+    PEERS.start()
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print("CRYPT listening on :%s music=%s" % (PORT, MUSIC_DIR), flush=True)
+    me = identity()
+    print("CRYPT %s listening on :%s music=%s id=%s uid=%s ip=%s" % (
+        VERSION, PORT, MUSIC_DIR, me.get("id"), me.get("uid"), me.get("ip")
+    ), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    PEERS.stop()
     httpd.server_close()
 
 
