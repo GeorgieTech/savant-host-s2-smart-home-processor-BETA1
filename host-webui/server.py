@@ -499,7 +499,15 @@ class CryptApp(object):
             if nxt:
                 WAVES.ensure(nxt)
             if not follow:
-                UNISON.broadcast("/api/unison/follow", {"name": name, "start": start, "order": self.order})
+                clock = self.player.snapshot().get("clock") or {}
+                play_at = clock.get("playback")
+                if play_at is None:
+                    play_at = start
+                UNISON.broadcast("/api/unison/follow", {
+                    "name": name,
+                    "start": play_at,
+                    "order": self.order,
+                })
         return ok
 
     def play_playlist(self, pid):
@@ -821,6 +829,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/unison":
                 snap = UNISON.set_on(bool(body.get("on")))
+                if snap.get("on") and not snap.get("following"):
+                    p = APP.player.snapshot()
+                    if p.get("playing") and p.get("name"):
+                        UNISON.broadcast("/api/unison/follow", {
+                            "name": p.get("name"),
+                            "start": p.get("playback") or 0,
+                            "order": list(APP.order or []),
+                        })
                 self._send(200, {"ok": True, "unison": snap})
                 return
             if path == "/api/playlists":

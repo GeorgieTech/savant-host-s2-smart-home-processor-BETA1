@@ -50,15 +50,34 @@ class FollowPlanTests(unittest.TestCase):
         self.assertEqual(plan, "hold")
         self.assertAlmostEqual(err, 0.008, places=4)
 
-    def test_nudge_small_drift(self):
+    def test_behind_smear_does_not_seek(self):
         plan, err = player.follow_plan(10.0, 10.04)
-        self.assertEqual(plan, "nudge")
+        self.assertEqual(plan, "hold")
         self.assertAlmostEqual(err, 0.04, places=4)
 
-    def test_seek_when_far(self):
-        plan, err = player.follow_plan(10.0, 10.2)
+    def test_ahead_slews_instead_of_restart(self):
+        plan, err = player.follow_plan(10.04, 10.0)
+        self.assertEqual(plan, "slew")
+        self.assertAlmostEqual(err, -0.04, places=4)
+
+    def test_catch_up_when_far_and_cool(self):
+        plan, err = player.follow_plan(10.0, 10.2, last_seek_age=9.0)
         self.assertEqual(plan, "seek")
         self.assertAlmostEqual(err, 0.2, places=4)
+
+    def test_path_delay_during_warmup_is_hold(self):
+        plan, err = player.follow_plan(10.407, 10.0, warming=True)
+        self.assertEqual(plan, "hold")
+        self.assertAlmostEqual(err, -0.407, places=3)
+
+    def test_no_second_seek_while_pll_relocks(self):
+        plan, err = player.follow_plan(10.0, 10.37, last_seek_age=1.5)
+        self.assertEqual(plan, "hold")
+        self.assertAlmostEqual(err, 0.37, places=3)
+
+    def test_jump_on_discontinuity(self):
+        plan, err = player.follow_plan(10.0, 12.0, last_seek_age=2.0)
+        self.assertEqual(plan, "seek")
 
 
 class DecoderSteerTests(unittest.TestCase):
