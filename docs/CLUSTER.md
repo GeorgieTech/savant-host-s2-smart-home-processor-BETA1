@@ -92,6 +92,8 @@ V1.1.8: `GET /api/library` on a viewer host merges shelves from `/data/crypt/pee
 
 V1.1.9: Settings → **On the LAN** lists every CRYPT chassis we hear, unique by Savant UID. UDP beacon on port 41880 plus `GET /api/hello`. **Live** = answering. **Linked** = this host lists it as a shelf. A third host shows up as its own blade; Link as shelf writes `peers.json`. `.40` / `.178` / `.180` never appear.
 
+V1.1.10: A link is two-way (unison catalog). Each library row is stamped with the chassis that holds the file (`home_stamp`). Play still copies onto the listening host, then local ffmpeg → TOSLINK. Optional **Unison TOSLINK** fans Play/Pause/Seek/Next to linked hosts; the follower steers its Time Clock toward the conductor’s heard clock. No streaming.
+
 ### Copy-then-play
 
 1. User picks a row owned by worker B.

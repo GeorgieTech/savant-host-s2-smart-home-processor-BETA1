@@ -1206,6 +1206,38 @@ body.job-busy .tabbar::before {
   font-size: 11px;
 }
 
+.home-chip {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(243,230,200,0.28);
+  background: #0e0b0c;
+  color: #f3e6c8;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  vertical-align: 1px;
+}
+.home-chip.away {
+  border-color: rgba(196,92,38,0.45);
+  color: var(--ember-2);
+}
+.home-chip.here {
+  border-color: rgba(134,197,111,0.4);
+  color: #c9e0b0;
+}
+.unison-btn {
+  letter-spacing: 0.12em;
+  min-height: 44px;
+}
+.unison-btn.on {
+  background: #4a1212;
+  border-color: var(--ember);
+  color: var(--bone);
+  box-shadow: 0 0 16px rgba(196,92,38,0.28);
+}
+
 .karaoke-page .kara-card { padding-bottom: 18px; }
 .kara-stage {
   margin: 12px 0 16px;

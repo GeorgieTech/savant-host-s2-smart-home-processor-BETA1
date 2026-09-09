@@ -31,7 +31,7 @@
         <h2>On the LAN</h2>
         <span class="badge" id="lan-badge">Listening</span>
       </div>
-      <p class="hint">Each chassis keeps its own Savant UID. <strong>Live</strong> means we hear it on 192.168.1.0/24. <strong>Linked</strong> means this host lists it as a music shelf — files stay there. A third host appears as its own blade when it comes online.</p>
+      <p class="hint">Each chassis keeps its own Savant UID. <strong>Live</strong> means we hear it on 192.168.1.0/24. <strong>Linked</strong> merges both libraries; the file stays on the owner. A third host appears as its own blade when it comes online.</p>
       <div class="mesh-wrap" aria-hidden="true">
         <svg id="mesh" viewBox="0 0 320 148" preserveAspectRatio="xMidYMid meet"></svg>
       </div>
@@ -42,6 +42,17 @@
       </div>
       <div class="err" id="err"></div>
       <div class="okline" id="ok"></div>
+    </section>
+    <section class="card">
+      <div class="section-head">
+        <h2>Unison TOSLINK</h2>
+        <span class="badge" id="uni-badge">Off</span>
+      </div>
+      <p class="hint">When this is on, Play / Pause / Seek / Next on this host also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Off means each TOSLINK is independent, still from the merged catalog.</p>
+      <div class="row">
+        <button type="button" class="unison-btn" id="uni-toggle">Unison off</button>
+      </div>
+      <p class="meta tight" id="uni-meta"></p>
     </section>
   </main>
   <nav class="tabbar">
@@ -64,9 +75,10 @@ function esc(s) {
 }
 function stamp(uid, fallback) {
   const s = String(uid || fallback || "");
-  const hex = s.replace(/[^0-9a-fA-F]/g, "");
-  if (hex.length >= 4) return hex.slice(-4).toUpperCase();
-  return (s.slice(-4) || "HOST").toUpperCase();
+  const hex = s.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  const core = hex.replace(/0+$/, "") || hex;
+  if (core.length >= 4) return core.slice(-4);
+  return (hex.slice(-4) || s.slice(-4) || "HOST").toUpperCase();
 }
 function commLine(h) {
   if (h.self) return "This chassis";
@@ -161,7 +173,7 @@ function blade(h) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "primary";
-      btn.textContent = "Link as shelf";
+      btn.textContent = "Link for unison";
       btn.onclick = () => linkHost(h);
       actions.appendChild(btn);
     }
@@ -169,6 +181,33 @@ function blade(h) {
   }
   return el;
 }
+async function loadUnison() {
+  try {
+    const data = await (await fetch("/api/unison")).json();
+    const u = data.unison || {};
+    const btn = $("uni-toggle");
+    const badge = $("uni-badge");
+    btn.classList.toggle("on", !!u.on);
+    btn.textContent = u.on ? "Unison on" : "Unison off";
+    badge.textContent = u.on ? (u.following ? "Following" : "On") : "Off";
+    badge.className = "badge " + (u.on ? "live" : "");
+    const bits = [];
+    if (u.linked) bits.push(u.linked + " linked");
+    if (u.following) bits.push("follow " + (u.conductor_stamp || "peer"));
+    if (u.drift_ms != null) bits.push(u.drift_ms + " ms");
+    $("uni-meta").textContent = bits.join(" · ");
+  } catch (e) {}
+}
+$("uni-toggle").onclick = async () => {
+  const cur = ($("uni-toggle").classList.contains("on"));
+  await fetch("/api/unison", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on: !cur }),
+  });
+  loadUnison();
+};
+
 function render(data) {
   const hosts = data.hosts || [];
   const online = data.online || 0;
@@ -255,7 +294,9 @@ async function unlinkHost(h) {
 }
 $("btn-scan").onclick = scan;
 loadFleet(true);
+loadUnison();
 setInterval(() => loadFleet(true), 4000);
+setInterval(loadUnison, 4000);
 </script>
 </body>
 </html>

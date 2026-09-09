@@ -18,7 +18,7 @@
   <header class="topbar">
     <div class="brand">
       <h1>CRYPT</h1>
-      <div class="sub">S2 · V1.1.9</div>
+      <div class="sub">S2 · V1.1.10</div>
     </div>
     <div class="top-end">
       <div class="hostline" id="hostline">Connecting…</div>
@@ -113,6 +113,7 @@
       </div>
       <div class="row center">
         <button class="ghost" onclick="api('/api/stop')">Stop</button>
+        <button type="button" class="unison-btn" id="unison" hidden>Unison TOSLINK</button>
       </div>
       <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100"></div>
       <div class="err" id="err"></div>
@@ -262,6 +263,14 @@ async function toggle() {
   else if (p.name) await api("/api/play", { name: p.name });
   else if ((last.count || 0) > 0) await api("/api/next");
   tick();
+}
+const unisonBtn = $("unison");
+if (unisonBtn) {
+  unisonBtn.onclick = async () => {
+    const on = !((last.unison || {}).on);
+    await api("/api/unison", { on: on });
+    tick();
+  };
 }
 async function playName(name) { unlockAudio(); await api("/api/play", { name }); tick(); }
 let volUser = false;
@@ -927,7 +936,25 @@ async function tick() {
     viz.mode = playing ? "play" : paused ? "pause" : "idle";
     viz.vol = ((st.volume == null ? 100 : st.volume) / 100);
     syncTap(p, playing);
-    $("hostline").textContent = (st.model || "SHR-S2") + " · TOSLINK";
+    const u = st.unison || {};
+    const uni = $("unison");
+    if (uni) {
+      if (u.linked > 0) {
+        uni.hidden = false;
+        uni.classList.toggle("on", !!u.on);
+        if (!u.on) uni.textContent = "Unison off";
+        else if (u.following) uni.textContent = "Unison · follow " + (u.conductor_stamp || "peer");
+        else uni.textContent = "Unison on";
+      } else {
+        uni.hidden = true;
+      }
+    }
+    let line = (st.model || "SHR-S2") + " · TOSLINK";
+    if (u.on && playing) {
+      line = "Unison TOSLINK";
+      if (u.drift_ms != null) line += " · " + u.drift_ms + " ms";
+    }
+    $("hostline").textContent = line;
     $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
     const ck = p.clock || {};
     const heard = (ck.heard != null ? ck.heard : p.position) || 0;

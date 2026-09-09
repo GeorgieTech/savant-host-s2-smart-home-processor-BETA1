@@ -39,7 +39,7 @@
     </div>
     <section class="card">
       <h2>Upload</h2>
-      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Uploads stay on this host. A shelf host can list another host’s library without keeping those files.</p>
+      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. After a link, both hosts show the same catalog. Each row is stamped with the chassis that holds the file. Play copies here, then this TOSLINK.</p>
       <div class="drop" id="drop">
         Drop files here, or
         <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
@@ -372,9 +372,13 @@ function rowTrack(t, opts) {
   const li = document.createElement("li");
   if (t.name === playingName()) li.className = "on";
   const bits = [t.artist, t.album].filter(Boolean);
-  if (t.local === false) bits.push("on shelf");
+  let where = "";
+  if (t.home_stamp) where = t.here ? ("here · " + t.home_stamp) : ("on " + t.home_stamp);
+  else if (t.local === false) where = "on shelf";
+  if (where) bits.push(where);
   const sub = bits.join(" · ");
-  li.innerHTML = "<div class='grow'><div class='name'>" + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
+  const chip = t.home_stamp ? ("<span class='home-chip " + (t.here ? "here" : "away") + "'>" + esc(t.home_stamp) + "</span>") : "";
+  li.innerHTML = "<div class='grow'><div class='name'>" + chip + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
   if (!(opts && opts.noAdd)) {
     const add = document.createElement("button");
     add.textContent = "Add";
@@ -387,7 +391,7 @@ function rowTrack(t, opts) {
     rm.onclick = (e) => opts.remove(t.name, e);
     li.appendChild(rm);
   } else {
-    if (t.local !== false) {
+    if (t.here !== false && t.home !== false && t.local !== false) {
       const del = document.createElement("button");
       del.textContent = "Delete";
       del.onclick = (e) => delName(t.name, e);
@@ -739,7 +743,7 @@ async function tick(force) {
     if (shelves.length) {
       const label = shelves.map((s) => s.id || s.url).join(", ");
       shelfHint.hidden = false;
-      shelfHint.textContent = "Showing the shelf on " + label + ". Files stay there. Play copies a track here first.";
+      shelfHint.textContent = "Unison catalog with " + label + ". The stamp on each track is the chassis that holds the file. Play copies here, then this TOSLINK.";
       if (peer.error) $("err").textContent = peer.error;
     } else {
       shelfHint.hidden = true;
@@ -750,7 +754,8 @@ async function tick(force) {
     $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
     $("err").textContent = "";
     const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
-    const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",");
+    const homes = (lib.tracks || []).map((t) => (t.home_stamp || "") + (t.here ? "h" : "")).join("");
+    const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",") + ":" + homes;
     if (manage && !force) return;
     if (force || next !== stamp) {
       stamp = next;

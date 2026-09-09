@@ -44,6 +44,23 @@ class LatencyPllTests(unittest.TestCase):
         self.assertEqual(st["lat_ms"], 360.0)
 
 
+class FollowPlanTests(unittest.TestCase):
+    def test_hold_when_close(self):
+        plan, err = player.follow_plan(10.000, 10.008)
+        self.assertEqual(plan, "hold")
+        self.assertAlmostEqual(err, 0.008, places=4)
+
+    def test_nudge_small_drift(self):
+        plan, err = player.follow_plan(10.0, 10.04)
+        self.assertEqual(plan, "nudge")
+        self.assertAlmostEqual(err, 0.04, places=4)
+
+    def test_seek_when_far(self):
+        plan, err = player.follow_plan(10.0, 10.2)
+        self.assertEqual(plan, "seek")
+        self.assertAlmostEqual(err, 0.2, places=4)
+
+
 class DecoderSteerTests(unittest.TestCase):
     def test_small_error_is_filtered(self):
         corr = player.discipline_decoder(0.0, 10.0, 10.02, alpha=0.12)

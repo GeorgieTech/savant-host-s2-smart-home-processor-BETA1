@@ -10,6 +10,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -20,6 +21,7 @@ from wave import WAVES
 from lyrics import LYRICS
 from report import REPORTS
 from peers import PEERS, VERSION, identity
+from unison import UNISON
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
@@ -201,15 +203,7 @@ def _safe_filename(name):
 def _library(local_only=False):
     local = CATALOG.tracks()
     if local_only or not PEERS.config().get("shelves"):
-        self_id = PEERS.config().get("id")
-        out = []
-        for t in local:
-            row = dict(t)
-            row["owner"] = self_id
-            row["local"] = True
-            row["available"] = True
-            out.append(row)
-        return out
+        return PEERS.tag_local(local)
     return PEERS.merge(local)
 
 
@@ -225,6 +219,7 @@ def _library_payload(local_only=False):
         "playlists": PLAYLISTS.list([t["name"] for t in tracks]),
         "genres": list(GENRES),
         "peer": peer,
+        "unison": UNISON.snapshot(),
     }
 
 
@@ -303,6 +298,8 @@ class CryptApp(object):
         self.order = []
         self.player = HostPlayer(on_end=self._on_end)
         self.player.set_eq(_load_eq())
+        UNISON.player = self.player
+        self._status_refresh = 0.0
         self.refresh()
 
     def refresh(self):
@@ -342,7 +339,10 @@ class CryptApp(object):
         return items, n - 1
 
     def status(self):
-        self.refresh()
+        now = time.time()
+        if now - self._status_refresh >= 8.0:
+            self._status_refresh = now
+            self.refresh()
         snap = self.player.snapshot()
         with self.lock:
             tracks = list(self.tracks)
@@ -368,6 +368,7 @@ class CryptApp(object):
             "disk": _disk(),
             "peer": PEERS.snapshot(),
             "fleet": PEERS.summary(),
+            "unison": UNISON.snapshot(),
         }
 
     def clock(self):
@@ -458,7 +459,11 @@ class CryptApp(object):
             self.player.error = "could not copy from shelf"
         return ok
 
-    def play_name(self, name, start=0.0, order=None):
+    def play_name(self, name, start=0.0, order=None, follow=False, conductor="", conductor_uid=""):
+        if follow:
+            UNISON.follow(conductor, conductor_uid)
+        else:
+            UNISON.unfollow()
         self.refresh()
         if not self._ensure_local(name):
             return False
@@ -492,6 +497,8 @@ class CryptApp(object):
             WAVES.ensure(name, front=True)
             if nxt:
                 WAVES.ensure(nxt)
+            if not follow:
+                UNISON.broadcast("/api/unison/follow", {"name": name, "start": start, "order": self.order})
         return ok
 
     def play_playlist(self, pid):
@@ -500,7 +507,7 @@ class CryptApp(object):
             return False
         return self.play_name(pl["tracks"][0], order=pl["tracks"])
 
-    def _start_name(self, name, start=0.0, nxt=""):
+    def _start_name(self, name, start=0.0, nxt="", follow=False):
         if not self._ensure_local(name):
             return False
         ok = self.player.play(name, start=start)
@@ -508,6 +515,8 @@ class CryptApp(object):
             WAVES.ensure(name, front=True)
             if nxt:
                 WAVES.ensure(nxt)
+            if not follow:
+                UNISON.broadcast("/api/unison/follow", {"name": name, "start": start})
         return ok
 
     def play_index(self, idx):
@@ -542,7 +551,35 @@ class CryptApp(object):
         return self._start_name(name, 0.0, nxt)
 
     def _on_end(self):
+        if UNISON.snapshot().get("following"):
+            return
         self.next_track()
+
+    def pause(self, follow=False):
+        ok = self.player.pause()
+        if ok and not follow:
+            UNISON.broadcast("/api/pause", {})
+        return ok
+
+    def resume(self, follow=False):
+        ok = self.player.resume()
+        if ok and not follow:
+            UNISON.broadcast("/api/resume", {})
+        return ok
+
+    def stop(self, follow=False):
+        if not follow:
+            UNISON.unfollow()
+            UNISON.broadcast("/api/stop", {})
+        else:
+            UNISON.unfollow()
+        return self.player.stop()
+
+    def seek(self, seconds, follow=False):
+        ok = self.player.seek(seconds)
+        if ok and not follow:
+            UNISON.broadcast("/api/seek", {"seconds": seconds})
+        return ok
 
     def delete_name(self, name, refresh=True):
         base = os.path.realpath(MUSIC_DIR)
@@ -558,6 +595,7 @@ class CryptApp(object):
         WAVES.drop_name(rel)
         LYRICS.drop_name(rel)
         REPORTS.drop_name(rel)
+        PEERS.drop_hot(rel)
         try:
             os.remove(full)
         except OSError:
@@ -675,6 +713,9 @@ class Handler(BaseHTTPRequestHandler):
                 probe = _qparam(qs, "probe") in ("1", "true", "yes")
                 self._send(200, PEERS.fleet(probe=probe, extra=_hello_extra()))
                 return
+            if raw_path == "/api/unison":
+                self._send(200, {"ok": True, "unison": UNISON.snapshot()})
+                return
             if raw_path == "/api/playlists":
                 tracks = _library()
                 self._send(200, {"playlists": PLAYLISTS.list([t["name"] for t in tracks])})
@@ -744,14 +785,42 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = _json_body(self)
             if path == "/api/play":
+                follow = bool(body.get("follow"))
                 if body.get("playlist"):
                     ok = APP.play_playlist(body.get("playlist"))
                     self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                     return
                 name = (body.get("name") or "").strip()
                 order = body.get("order") if isinstance(body.get("order"), list) else None
-                ok = APP.play_name(name, start=body.get("start") or 0, order=order)
+                ok = APP.play_name(
+                    name,
+                    start=body.get("start") or 0,
+                    order=order,
+                    follow=follow,
+                    conductor=body.get("conductor") or "",
+                    conductor_uid=body.get("conductor_uid") or "",
+                )
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
+                return
+            if path == "/api/unison/follow":
+                def _run_follow(payload):
+                    try:
+                        APP.play_name(
+                            (payload.get("name") or "").strip(),
+                            start=payload.get("start") or 0,
+                            order=payload.get("order") if isinstance(payload.get("order"), list) else None,
+                            follow=True,
+                            conductor=payload.get("conductor") or "",
+                            conductor_uid=payload.get("conductor_uid") or "",
+                        )
+                    except Exception:
+                        traceback.print_exc()
+                threading.Thread(target=_run_follow, args=(body,), daemon=True, name="unison-follow").start()
+                self._send(202, {"ok": True})
+                return
+            if path == "/api/unison":
+                snap = UNISON.set_on(bool(body.get("on")))
+                self._send(200, {"ok": True, "unison": snap})
                 return
             if path == "/api/playlists":
                 try:
@@ -765,15 +834,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, payload)
                 return
             if path == "/api/pause":
-                ok = APP.player.pause()
+                ok = APP.pause(follow=bool(body.get("follow")))
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/resume":
-                ok = APP.player.resume()
+                ok = APP.resume(follow=bool(body.get("follow")))
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/stop":
-                self._send(200, {"ok": APP.player.stop()})
+                self._send(200, {"ok": APP.stop(follow=bool(body.get("follow")))})
                 return
             if path == "/api/next":
                 ok = APP.next_track()
@@ -784,7 +853,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/seek":
-                ok = APP.player.seek(body.get("seconds"))
+                ok = APP.seek(body.get("seconds"), follow=bool(body.get("follow")))
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/volume":
@@ -828,14 +897,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, PEERS.fleet(probe=True, extra=_hello_extra(), force=True))
                     return
                 if action == "link":
-                    ok, err = PEERS.link(body.get("url") or body.get("ip") or "")
+                    notify = True if "notify" not in body else bool(body.get("notify"))
+                    ok, err = PEERS.link(body.get("url") or body.get("ip") or "", notify=notify)
                     payload = PEERS.fleet(probe=True, extra=_hello_extra())
                     payload["ok"] = ok
                     payload["error"] = err
                     self._send(200 if ok else 400, payload)
                     return
                 if action == "unlink":
-                    ok, err = PEERS.unlink(body.get("id") or body.get("uid") or body.get("url") or "")
+                    notify = True if "notify" not in body else bool(body.get("notify"))
+                    ok, err = PEERS.unlink(body.get("id") or body.get("uid") or body.get("url") or "", notify=notify)
                     payload = PEERS.fleet(probe=False, extra=_hello_extra())
                     payload["ok"] = ok
                     payload["error"] = err
@@ -896,13 +967,23 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._send(400, {"ok": False, "error": str(exc)})
             return
+        PEERS.drop_hot(name)
         APP.refresh()
         self._send(200, {"ok": True, "name": name, "size": written})
+
+
+def _boot_unison():
+    time.sleep(6)
+    try:
+        PEERS.fleet(probe=True, extra=_hello_extra())
+    except Exception:
+        traceback.print_exc()
 
 
 def main():
     os.makedirs(MUSIC_DIR, exist_ok=True)
     PEERS.start()
+    threading.Thread(target=_boot_unison, daemon=True, name="boot-unison").start()
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     me = identity()
     print("CRYPT %s listening on :%s music=%s id=%s uid=%s ip=%s" % (

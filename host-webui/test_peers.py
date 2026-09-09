@@ -67,7 +67,7 @@ class EnsureTests(unittest.TestCase):
             calls = []
             def fake_http(url):
                 return {"ok": True, "tracks": [{"name": "Glow.wav"}]}
-            idx = peers.PeerIndex(path="/no/such.json", http=fake_http)
+            idx = peers.PeerIndex(path="/no/such.json", http=fake_http, hot_path=os.path.join(folder, "hot.json"))
             idx._cfg = {"id": "v", "shelves": [{"id": "s", "url": "http://192.168.1.179"}]}
             orig_urlopen = peers.urlopen
             class FakeFH(object):
@@ -89,6 +89,7 @@ class EnsureTests(unittest.TestCase):
             self.assertTrue(ok)
             dest = os.path.join(folder, "Glow.wav")
             self.assertTrue(os.path.isfile(dest))
+            self.assertTrue(idx.is_hot("Glow.wav"))
             with open(dest, "rb") as fh:
                 self.assertEqual(fh.read(), b"RIFFTEST")
         finally:
@@ -102,6 +103,9 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(peers._uid_from("sav-001aae0739db0000"), "001AAE0739DB0000")
         self.assertEqual(peers._uid_from("192.168.1.111"), "")
         self.assertEqual(peers._uid_from("001AAE10E4090000"), "001AAE10E4090000")
+        self.assertEqual(peers.stamp("crypt-001aae10e4090000"), "E409")
+        self.assertEqual(peers.stamp("001AAE10E4090000"), "E409")
+        self.assertEqual(peers.stamp("001AAE0739DB0000"), "39DB")
 
 
 class RosterTests(unittest.TestCase):
@@ -180,6 +184,42 @@ class RosterTests(unittest.TestCase):
         self.assertEqual(rows, [])
 
 
+class HomeMergeTests(unittest.TestCase):
+    def test_hot_copy_keeps_shelf_as_home(self):
+        def fake(url):
+            return {"ok": True, "tracks": [
+                {"name": "Glow.flac", "title": "Glow", "size": 12, "home": True, "owner": "crypt-001aae10e4090000", "owner_uid": "001AAE10E4090000"},
+            ]}
+        idx = peers.PeerIndex(path="/no/such.json", http=fake, seen_path="/no/such/seen.json", hot_path="/no/such/hot.json")
+        idx._cfg = {
+            "id": "crypt-001aae0739db0000",
+            "shelves": [{"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179", "uid": "001AAE10E4090000"}],
+        }
+        idx._hot.add("Glow.flac")
+        out = idx.merge([{"name": "Glow.flac", "title": "Glow", "size": 12, "home": False}])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["owner"], "crypt-001aae10e4090000")
+        self.assertTrue(out[0]["local"])
+        self.assertFalse(out[0]["here"])
+        self.assertEqual(out[0]["home_stamp"], "E409")
+
+    def test_home_host_does_not_lose_owner_to_a_copy(self):
+        def fake(url):
+            return {"ok": True, "tracks": [
+                {"name": "Glow.flac", "size": 12, "home": False},
+            ]}
+        idx = peers.PeerIndex(path="/no/such.json", http=fake, seen_path="/no/such/seen.json", hot_path="/no/such/hot.json")
+        idx._cfg = {
+            "id": "crypt-001aae10e4090000",
+            "shelves": [{"id": "crypt-001aae0739db0000", "url": "http://192.168.1.142", "uid": "001AAE0739DB0000"}],
+        }
+        out = idx.merge([{"name": "Glow.flac", "size": 12, "home": True}])
+        self.assertEqual(out[0]["owner"], "crypt-001aae10e4090000")
+        self.assertTrue(out[0]["here"])
+        self.assertTrue(out[0]["home"])
+        self.assertEqual(out[0]["home_stamp"], "E409")
+
+
 class LinkTests(unittest.TestCase):
     def test_link_saves_shelf_and_unlink_drops_it(self):
         folder = tempfile.mkdtemp(prefix="crypt-link-")
@@ -205,8 +245,8 @@ class LinkTests(unittest.TestCase):
                     "tracks": 71,
                 }
 
-            idx = peers.PeerIndex(path=path, http=fake, seen_path=seen)
-            ok, err = idx.link("http://192.168.1.179")
+            idx = peers.PeerIndex(path=path, http=fake, seen_path=seen, hot_path=os.path.join(folder, "hot.json"))
+            ok, err = idx.link("http://192.168.1.179", notify=False)
             self.assertTrue(ok, err)
             cfg = peers.load_config(path)
             self.assertEqual(len(cfg["shelves"]), 1)

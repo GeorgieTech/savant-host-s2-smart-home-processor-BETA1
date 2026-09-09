@@ -25,9 +25,10 @@ except ImportError:
 
 from player import MUSIC_DIR
 
-VERSION = "1.1.9"
+VERSION = "1.1.10"
 PEERS_FILE = os.environ.get("CRYPT_PEERS", "/data/crypt/peers.json")
 SEEN_FILE = os.environ.get("CRYPT_SEEN", "/data/crypt/seen.json")
+HOT_FILE = os.environ.get("CRYPT_HOT", "/data/crypt/hot.json")
 CLIENT = "CRYPT/%s (peer)" % VERSION
 BLOCKED = ("192.168.1.40", "192.168.1.178", "192.168.1.180")
 AUDIO_EXT = (".mp3", ".flac", ".opus", ".ogg", ".wav", ".m4a", ".aac")
@@ -243,14 +244,39 @@ def save_config(cfg, path=None):
     return payload
 
 
-def _http_json(url, timeout=4):
-    req = Request(url, headers={"User-Agent": CLIENT, "Accept": "application/json"})
+def stamp(uid_or_id):
+    uid = _uid_from(uid_or_id) or ""
+    if not uid:
+        uid = str(uid_or_id or "").strip().upper().replace(":", "")
+    core = uid.rstrip("0") or uid
+    if len(core) >= 4:
+        return core[-4:]
+    return uid[-4:] if len(uid) >= 4 else uid
+
+
+def _http_send(url, timeout=4, data=None):
+    headers = {"User-Agent": CLIENT, "Accept": "application/json"}
+    raw = None
+    if data is not None:
+        raw = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = Request(url, data=raw, headers=headers)
     fh = urlopen(req, timeout=timeout)
     try:
-        raw = fh.read(2 * 1024 * 1024)
+        body = fh.read(2 * 1024 * 1024)
     finally:
         fh.close()
-    return json.loads(raw.decode("utf-8"))
+    if not body:
+        return {}
+    return json.loads(body.decode("utf-8"))
+
+
+def _http_json(url, timeout=4):
+    return _http_send(url, timeout=timeout)
+
+
+def _http_post(url, data, timeout=8):
+    return _http_send(url, timeout=timeout, data=data or {})
 
 
 def _safe_rel(name):
@@ -276,6 +302,7 @@ def _blank_host():
         "online": False,
         "linked": False,
         "sees_us": False,
+        "lists_us": False,
         "tracks": 0,
         "playing": False,
         "now": "",
@@ -313,6 +340,7 @@ def _as_host(data, **extra):
     row["online"] = bool(src.get("online"))
     row["linked"] = bool(src.get("linked"))
     row["sees_us"] = bool(src.get("sees_us"))
+    row["lists_us"] = bool(src.get("lists_us"))
     try:
         row["tracks"] = int(src.get("tracks") or 0)
     except (TypeError, ValueError):
@@ -360,7 +388,7 @@ def _merge_host(dst, src):
         if src.get(key) and (not out.get(key) or key in ("model", "version", "now", "error")):
             if src.get(key):
                 out[key] = src[key]
-    for flag in ("self", "online", "linked", "sees_us", "playing"):
+    for flag in ("self", "online", "linked", "sees_us", "lists_us", "playing"):
         out[flag] = bool(out.get(flag) or src.get(flag))
     if int(src.get("tracks") or 0) > int(out.get("tracks") or 0):
         out["tracks"] = int(src.get("tracks") or 0)
@@ -400,9 +428,10 @@ def _fold_hosts(rows):
 
 
 class PeerIndex(object):
-    def __init__(self, path=None, http=None, seen_path=None):
+    def __init__(self, path=None, http=None, seen_path=None, hot_path=None):
         self.path = path or PEERS_FILE
         self.seen_path = seen_path or SEEN_FILE
+        self.hot_path = hot_path or HOT_FILE
         self.http = http or _http_json
         self.lock = threading.Lock()
         self._cfg = load_config(self.path)
@@ -410,6 +439,7 @@ class PeerIndex(object):
         self._seen = {}
         self._probe = {}
         self._candidates = set()
+        self._hot = set()
         self._alive = False
         self._thread = None
         self._sock = None
@@ -417,6 +447,7 @@ class PeerIndex(object):
         self.beacon_error = ""
         self.error = ""
         self._load_seen()
+        self._load_hot()
 
     def reload(self):
         self._cfg = load_config(self.path)
@@ -490,6 +521,55 @@ class PeerIndex(object):
                 continue
             host["online"] = False
             self._remember(host, persist=False)
+
+    def _load_hot(self):
+        try:
+            with open(self.hot_path, "r") as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            self._hot = set()
+            return
+        names = raw.get("names") if isinstance(raw, dict) else raw
+        if not isinstance(names, list):
+            self._hot = set()
+            return
+        self._hot = set(str(n) for n in names if n)
+
+    def _persist_hot(self):
+        folder = os.path.dirname(self.hot_path)
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError:
+                return
+        tmp = self.hot_path + ".tmp"
+        try:
+            with open(tmp, "w") as fh:
+                json.dump({"names": sorted(self._hot)}, fh)
+            os.replace(tmp, self.hot_path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def is_hot(self, name):
+        rel = (name or "").replace("\\", "/").lstrip("/")
+        return rel in self._hot
+
+    def mark_hot(self, name):
+        rel = (name or "").replace("\\", "/").lstrip("/")
+        if not rel or rel in self._hot:
+            return
+        self._hot.add(rel)
+        self._persist_hot()
+
+    def drop_hot(self, name):
+        rel = (name or "").replace("\\", "/").lstrip("/")
+        if not rel or rel not in self._hot:
+            return
+        self._hot.discard(rel)
+        self._persist_hot()
 
     def _persist_seen(self):
         folder = os.path.dirname(self.seen_path)
@@ -590,10 +670,14 @@ class PeerIndex(object):
             return [], "no url"
         now = time.time()
         hit = self._remote.get(url)
-        if hit and now - hit[0] < 8:
+        ttl = 8
+        if hit and now - hit[0] < (2 if hit[2] else ttl):
             return hit[1], hit[2]
         try:
-            data = self.http(url + "/api/library?local=1")
+            try:
+                data = self.http(url + "/api/library?local=1", timeout=20)
+            except TypeError:
+                data = self.http(url + "/api/library?local=1")
             err = ""
             tracks = []
             if not isinstance(data, dict) or not data.get("ok"):
@@ -620,45 +704,93 @@ class PeerIndex(object):
                 return shelf.get("url")
         return ""
 
-    def merge(self, local_tracks):
+    def _decorate(self, row, owner_id, owner_uid, here):
+        row["owner"] = owner_id or ""
+        row["owner_uid"] = owner_uid or _uid_from(owner_id) or ""
+        row["home_stamp"] = stamp(row["owner_uid"] or owner_id)
+        row["here"] = bool(here)
+        return row
+
+    def tag_local(self, tracks):
         cfg = self.config()
-        self_id = cfg.get("id") or _self_id()
-        by = {}
-        for t in local_tracks or []:
+        me = identity()
+        self_id = cfg.get("id") or me.get("id") or _self_id()
+        self_uid = me.get("uid") or _uid_from(self_id)
+        out = []
+        for t in tracks or []:
             name = (t or {}).get("name")
             if not name:
                 continue
             row = dict(t)
-            row["owner"] = self_id
+            home = not self.is_hot(name) if row.get("home") is None else bool(row.get("home"))
             row["local"] = True
             row["available"] = True
-            by[name] = row
+            row["home"] = home
+            if home:
+                self._decorate(row, self_id, self_uid, True)
+            else:
+                row["here"] = False
+                row["owner"] = row.get("owner") or ""
+                row["owner_uid"] = row.get("owner_uid") or ""
+                row["home_stamp"] = stamp(row.get("owner_uid") or row.get("owner") or "")
+            out.append(row)
+        return out
+
+    def merge(self, local_tracks):
+        cfg = self.config()
+        me = identity()
+        self_id = cfg.get("id") or me.get("id") or _self_id()
+        self_uid = me.get("uid") or _uid_from(self_id)
+        by = {}
+        for t in self.tag_local(local_tracks):
+            by[t["name"]] = t
         errors = []
         for shelf in cfg.get("shelves") or []:
             tracks, err = self.fetch_shelf(shelf)
             if err:
                 errors.append("%s: %s" % (shelf.get("id"), err))
                 continue
+            shelf_id = shelf.get("id") or shelf.get("url")
+            shelf_uid = shelf.get("uid") or _uid_from(shelf_id)
             for t in tracks:
                 name = (t or {}).get("name")
                 if not name:
                     continue
-                owner = shelf.get("id") or shelf.get("url")
+                remote_home = True if t.get("home") is None else bool(t.get("home"))
+                remote_owner = t.get("owner") or shelf_id
+                remote_uid = t.get("owner_uid") or (shelf_uid if remote_owner in (shelf_id, shelf.get("url")) else _uid_from(remote_owner))
                 if name in by:
-                    by[name]["owner"] = owner
-                    by[name]["local"] = True
-                    by[name]["available"] = True
-                    if not by[name].get("title") and t.get("title"):
-                        by[name]["title"] = t.get("title")
-                    if not by[name].get("artist") and t.get("artist"):
-                        by[name]["artist"] = t.get("artist")
-                    if not by[name].get("album") and t.get("album"):
-                        by[name]["album"] = t.get("album")
+                    cur = by[name]
+                    cur["local"] = True
+                    cur["available"] = True
+                    if remote_home and not cur.get("home"):
+                        self._decorate(cur, remote_owner, remote_uid, False)
+                        cur["home"] = False
+                    elif remote_home and cur.get("home"):
+                        same_size = False
+                        try:
+                            same_size = int(cur.get("size") or 0) == int(t.get("size") or 0)
+                        except (TypeError, ValueError):
+                            same_size = False
+                        if same_size and int(t.get("size") or 0) > 0:
+                            self._decorate(cur, remote_owner, remote_uid, False)
+                            cur["home"] = False
+                            self.mark_hot(name)
+                    if not cur.get("title") and t.get("title"):
+                        cur["title"] = t.get("title")
+                    if not cur.get("artist") and t.get("artist"):
+                        cur["artist"] = t.get("artist")
+                    if not cur.get("album") and t.get("album"):
+                        cur["album"] = t.get("album")
                     continue
                 row = dict(t)
-                row["owner"] = owner
                 row["local"] = False
                 row["available"] = True
+                row["home"] = False
+                if remote_home:
+                    self._decorate(row, remote_owner, remote_uid, False)
+                else:
+                    self._decorate(row, remote_owner, remote_uid, False)
                 by[name] = row
         self.error = "; ".join(errors)
         out = list(by.values())
@@ -721,6 +853,7 @@ class PeerIndex(object):
                 raise IOError("empty")
             os.replace(tmp, dest)
             os.chmod(dest, 0o644)
+            self.mark_hot(rel)
             return True
         except Exception:
             try:
@@ -729,10 +862,18 @@ class PeerIndex(object):
                 pass
             return False
 
-    def _points_at_us(self, data, me):
+    def _mine(self, me):
+        me = me or identity()
+        cfg = self.config()
+        return set(filter(None, [
+            me.get("id"), me.get("uid"), me.get("ip"), me.get("host"), me.get("url"),
+            cfg.get("id"),
+        ]))
+
+    def _lists_us_as_shelf(self, data, me):
         if not isinstance(data, dict):
             return False
-        mine = set(filter(None, [me.get("id"), me.get("uid"), me.get("ip"), me.get("host"), me.get("url")]))
+        mine = self._mine(me)
         for shelf in data.get("shelves") or []:
             if not isinstance(shelf, dict):
                 continue
@@ -740,6 +881,14 @@ class PeerIndex(object):
             for bit in bits:
                 if bit and bit in mine:
                     return True
+        return False
+
+    def _points_at_us(self, data, me):
+        if self._lists_us_as_shelf(data, me):
+            return True
+        if not isinstance(data, dict):
+            return False
+        mine = self._mine(me)
         for seen in data.get("seen") or []:
             if not isinstance(seen, dict):
                 continue
@@ -779,6 +928,7 @@ class PeerIndex(object):
                 "now": data.get("now"),
                 "online": True,
                 "sees_us": self._points_at_us(data, me),
+                "lists_us": self._lists_us_as_shelf(data, me),
                 "rtt_ms": rtt,
                 "last_seen": now,
                 "via": ["hello"],
@@ -884,6 +1034,9 @@ class PeerIndex(object):
 
     def fleet(self, probe=False, extra=None, force=False):
         hosts = self.roster(probe=probe, extra=extra, force=force)
+        if probe:
+            self.maybe_unison_link(hosts)
+            hosts = self.roster(probe=False, extra=extra)
         return {
             "ok": True,
             "crypt": 1,
@@ -900,7 +1053,7 @@ class PeerIndex(object):
             "error": self.error,
         }
 
-    def link(self, url):
+    def link(self, url, notify=True):
         url = _clean_url(url)
         if not url:
             return False, "blocked or bad url"
@@ -919,7 +1072,8 @@ class PeerIndex(object):
                 continue
             seen.add(item_url)
             shelves.append(item)
-        if url not in seen:
+        added = url not in seen
+        if added:
             shelves.append({"id": sid, "url": url, "uid": uid})
         cfg["id"] = cfg.get("id") or me.get("id")
         cfg["shelves"] = shelves
@@ -928,19 +1082,26 @@ class PeerIndex(object):
         if found:
             found["linked"] = True
             self._remember(found)
+        if notify and added:
+            our = me.get("url") or (("http://%s" % me["ip"]) if me.get("ip") else "")
+            if our:
+                try:
+                    _http_post(url + "/api/fleet", {"action": "link", "url": our, "notify": False}, timeout=6)
+                except Exception:
+                    pass
         return True, ""
 
-    def unlink(self, key):
+    def unlink(self, key, notify=True):
         key = str(key or "").strip()
         if not key:
             return False, "need id or url"
         cfg = load_config(self.path)
         kept = []
-        dropped = False
+        dropped = None
         for item in cfg.get("shelves") or []:
             bits = [item.get("id"), item.get("uid"), item.get("url"), urlparse(item.get("url") or "").hostname]
             if key in [str(b) for b in bits if b]:
-                dropped = True
+                dropped = item
                 continue
             kept.append(item)
         if not dropped:
@@ -948,7 +1109,26 @@ class PeerIndex(object):
         cfg["shelves"] = kept
         save_config(cfg, self.path)
         self.reload()
+        if notify and dropped.get("url"):
+            me = identity()
+            try:
+                _http_post(dropped["url"] + "/api/fleet", {
+                    "action": "unlink",
+                    "id": me.get("uid") or cfg.get("id") or "",
+                    "notify": False,
+                }, timeout=6)
+            except Exception:
+                pass
         return True, ""
+
+    def maybe_unison_link(self, hosts=None):
+        """If a live host already lists us as a shelf, link back so libraries merge."""
+        rows = hosts if hosts is not None else self.roster(probe=False)
+        for host in rows:
+            if host.get("self") or host.get("linked") or not host.get("online"):
+                continue
+            if host.get("lists_us") and host.get("url"):
+                self.link(host.get("url"), notify=False)
 
     def _beacon_payload(self):
         me = identity()

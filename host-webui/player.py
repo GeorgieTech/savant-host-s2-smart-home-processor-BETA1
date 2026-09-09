@@ -238,6 +238,19 @@ def discipline_latency(state, sample, capture=PLL_CAPTURE, hold=PLL_HOLD):
     return state
 
 
+def follow_plan(local_heard, target_heard, hold_s=0.012, seek_s=0.08):
+    """How to keep this TOSLINK Time Clock on another host's heard clock."""
+    try:
+        err = float(target_heard) - float(local_heard)
+    except (TypeError, ValueError):
+        return "hold", 0.0
+    if abs(err) < hold_s:
+        return "hold", err
+    if abs(err) >= seek_s:
+        return "seek", err
+    return "nudge", err
+
+
 def discipline_decoder(corr, mono_s, ref_s, alpha=0.12, snap_s=0.35):
     """Steer the monotonic oscillator toward ffmpeg out_time without steps."""
     if ref_s is None:
@@ -486,6 +499,29 @@ class HostPlayer(object):
             self.error = ""
             return True
 
+    def follow_heard(self, target_heard):
+        """Steer this chassis' Time Clock toward another host's heard position."""
+        snap = self.snapshot()
+        if not snap.get("playing"):
+            return False
+        clock = snap.get("clock") or {}
+        local = clock.get("heard")
+        if local is None:
+            return False
+        plan, err = follow_plan(local, target_heard)
+        if plan == "hold":
+            return True
+        if plan == "seek":
+            now = time.monotonic()
+            if now - self._sync_seek_at < 2.0:
+                return True
+            self._sync_seek_at = now
+            lat = float(clock.get("latency_ms") or 90.0) / 1000.0
+            return self.seek(max(0.0, float(target_heard) + lat))
+        with self.lock:
+            self._play_corr = discipline_decoder(self._play_corr or 0.0, local, float(target_heard), alpha=0.22)
+        return True
+
     def seek(self, seconds):
         with self.lock:
             if not self.media:
@@ -616,6 +652,7 @@ class HostPlayer(object):
         self._play_corr = 0.0
         self._ppm = 0.0
         self._ref_age = 0.0
+        self._sync_seek_at = 0.0
 
     def _mono_locked(self):
         if self.paused or not self._alive_locked():
