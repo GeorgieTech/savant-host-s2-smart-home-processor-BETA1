@@ -61,8 +61,13 @@ class FollowPlanTests(unittest.TestCase):
         self.assertAlmostEqual(err, -0.04, places=4)
 
     def test_catch_up_when_far_and_cool(self):
-        plan, err = player.follow_plan(10.0, 10.2, last_seek_age=9.0)
+        plan, err = player.follow_plan(10.0, 10.2, last_seek_age=9.0, good_age=9.0)
         self.assertEqual(plan, "seek")
+        self.assertAlmostEqual(err, 0.2, places=4)
+
+    def test_no_catch_up_right_after_a_lock(self):
+        plan, err = player.follow_plan(10.0, 10.2, last_seek_age=9.0, good_age=1.0)
+        self.assertEqual(plan, "hold")
         self.assertAlmostEqual(err, 0.2, places=4)
 
     def test_path_delay_during_warmup_is_hold(self):

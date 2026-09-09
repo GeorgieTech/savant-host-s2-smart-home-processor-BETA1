@@ -525,7 +525,11 @@ class CryptApp(object):
             if nxt:
                 WAVES.ensure(nxt)
             if not follow:
-                UNISON.broadcast("/api/unison/follow", {"name": name, "start": start})
+                clock = self.player.snapshot().get("clock") or {}
+                play_at = clock.get("playback")
+                if play_at is None:
+                    play_at = start
+                UNISON.broadcast("/api/unison/follow", {"name": name, "start": play_at})
         return ok
 
     def play_index(self, idx):

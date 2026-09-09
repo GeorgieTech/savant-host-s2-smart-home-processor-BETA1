@@ -246,6 +246,7 @@ def follow_plan(
     jump_s=1.25,
     warming=False,
     last_seek_age=999.0,
+    good_age=999.0,
     catch_age=8.0,
 ):
     """How to keep this TOSLINK on another host's heard clock.
@@ -264,7 +265,7 @@ def follow_plan(
         return "hold", err
     if abs(err) >= jump_s and last_seek_age >= 2.0:
         return "seek", err
-    if abs(err) >= catch_s and last_seek_age >= catch_age:
+    if abs(err) >= catch_s and last_seek_age >= 2.0 and good_age >= catch_age:
         return "seek", err
     if err < -hold_s:
         return "slew", err
@@ -536,49 +537,64 @@ class HostPlayer(object):
             target_heard,
             warming=warming,
             last_seek_age=now - float(self._sync_seek_at or 0.0),
+            good_age=now - float(self._sync_good_at or 0.0),
         )
         if plan == "hold":
+            if abs(err) < 0.018:
+                self._sync_good_at = now
             return True
         if plan == "slew":
             now2 = time.monotonic()
             if now2 - float(self._sync_slew_at or 0.0) < 0.4:
                 return True
+            if self._sync_slewing:
+                return True
             self._sync_slew_at = now2
             seconds = min(0.08, abs(float(err)))
+            gen = self.generation
             threading.Thread(
                 target=self._slew_ahead,
-                args=(seconds,),
+                args=(seconds, gen),
                 daemon=True,
                 name="unison-slew",
             ).start()
             return True
         if plan == "seek":
             self._sync_seek_at = now
+            self._sync_good_at = now
             return self.seek(max(0.0, float(target_heard) + lat))
         return True
 
-    def _slew_ahead(self, seconds):
+    def _slew_ahead(self, seconds, gen=None):
         """Local optical is ahead: pause the pipe briefly. Do not restart ffmpeg."""
         seconds = max(0.0, min(0.08, float(seconds or 0.0)))
         if seconds < 0.008:
             return True
-        with self.lock:
-            if self.paused or not self._alive_locked() or self.proc is None:
-                return True
-            try:
-                os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
-            except Exception:
-                return False
-        time.sleep(seconds)
-        with self.lock:
-            if self.proc is None or self.paused:
-                return True
-            try:
-                os.killpg(os.getpgid(self.proc.pid), signal.SIGCONT)
-            except Exception:
-                return False
-            self.t0 += seconds
-        return True
+        self._sync_slewing = True
+        try:
+            with self.lock:
+                if gen is not None and gen != self.generation:
+                    return True
+                if self.paused or not self._alive_locked() or self.proc is None:
+                    return True
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
+                except Exception:
+                    return False
+            time.sleep(seconds)
+            with self.lock:
+                if gen is not None and gen != self.generation:
+                    return True
+                if self.proc is None or self.paused:
+                    return True
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGCONT)
+                except Exception:
+                    return False
+                self.t0 += seconds
+            return True
+        finally:
+            self._sync_slewing = False
 
     def seek(self, seconds):
         with self.lock:
@@ -713,6 +729,8 @@ class HostPlayer(object):
         self._sync_seek_at = 0.0
         self._sync_warm_until = 0.0
         self._sync_slew_at = 0.0
+        self._sync_slewing = False
+        self._sync_good_at = 0.0
 
     def _mono_locked(self):
         if self.paused or not self._alive_locked():
