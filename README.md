@@ -8,7 +8,7 @@ A local TOSLINK music player on a recycled **Savant SHR-S2-00** rack host. Same 
 
 This project is **not affiliated with Savant Systems**.
 
-Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident), 192.168.1.178 (Gigawatt), or 192.168.1.180 (Giggwatt Beta1).
+Targets: **192.168.1.179** (DualLite S2 mule) and **192.168.1.142** (first SHC-2000, same CRYPT UI). Do not use 192.168.1.40 (live Carrillos Resident), 192.168.1.178 (Gigawatt), or 192.168.1.180 (Giggwatt Beta1).
 
 ## What V1.1.7 does
 
@@ -26,7 +26,7 @@ Target: **192.168.1.179** only. Do not use 192.168.1.40 (live Carrillos Resident
 
 No AirPlay, Spotify, DLNA, NAS, or SSC expanders. DualLite + 1 GB RAM.
 
-Live UI: [http://192.168.1.179/](http://192.168.1.179/) · Library: [http://192.168.1.179/library](http://192.168.1.179/library) · Karaoke: [http://192.168.1.179/karaoke](http://192.168.1.179/karaoke) · Report: [http://192.168.1.179/report](http://192.168.1.179/report) · EQ: [http://192.168.1.179/eq](http://192.168.1.179/eq)
+Live UI (S2): [http://192.168.1.179/](http://192.168.1.179/) · SHC-2000: [http://192.168.1.142/](http://192.168.1.142/)
 
 On a phone: open the UI in Safari/Chrome, then **Add to Home Screen**.
 
@@ -38,9 +38,10 @@ On a phone: open the UI in Safari/Chrome, then **Add to Home Screen**.
 
 ## Host
 
-- Hardware: [docs/HOST.md](docs/HOST.md)
+- Hardware (DualLite S2): [docs/HOST.md](docs/HOST.md)
+- Hardware (first SHC-2000): [docs/HOST-142.md](docs/HOST-142.md)
 - Deploy: [docs/DEPLOY.md](docs/DEPLOY.md)
-- Future fleet: [docs/CLUSTER.md](docs/CLUSTER.md) — three SHC-2000 workers + one SHC-2000 TOSLINK playback, feeding a separate app. Not built yet.
+- Fleet plan: [docs/CLUSTER.md](docs/CLUSTER.md) — three SHC-2000 workers + one SHC-2000 TOSLINK playback, feeding a separate app. First Quad is at 192.168.1.142.
 
 ## License
 

@@ -1,6 +1,8 @@
 # Deploy notes — CRYPT V1.1.7
 
-Target: **192.168.1.179**. Never 192.168.1.40 / .178 / .180.
+Targets: **192.168.1.179** (DualLite S2) and **192.168.1.142** (SHC-S2-00 Quad). Never 192.168.1.40 / .178 / .180.
+
+Do not `dd` the S2 eMMC onto an SHC-2000. Install CRYPT files the same way on both; `/data` is `mmcblk0p2` on DualLite and `mmcblk0p3` on Quad.
 
 SSH user: `RPM`. Do not commit the password. `scp -O` from modern macOS.
 

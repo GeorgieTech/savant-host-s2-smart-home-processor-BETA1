@@ -1,6 +1,6 @@
 # Future plan — four SHC-2000 CRYPT engines
 
-Status: **plan only**. Not built. Live CRYPT V1.1.7 stays on the DualLite SHR-S2 at **192.168.1.179**.
+Status: **plan + first chassis**. Live DualLite mule remains **192.168.1.179**. First SHC-2000 is converted at **192.168.1.142** (same CRYPT V1.1.7 UI, empty library). Three more Quad hosts are not on the LAN yet. The library model below (shard on workers, hot cache on playback) is still the target.
 
 Goal: three SHC-2000 hosts are **library + job workers**. A fourth SHC-2000 is the **TOSLINK playback cache** — it lists the whole fleet library, but only keeps a few files on its own eMMC while they are about to play, playing, or just played. A **separate application** (not this DualLite UI) sits in front, owns the fleet catalog, copies bytes when needed, fans research jobs out, and consumes the JSON those four hosts produce.
 
@@ -57,7 +57,13 @@ Workaround: **copy, then play**. Worker B keeps the home copy. Playback gets a t
 
 The live host at `.179` is an **SHR-S2-00 DualLite**. Do **not** `dd` that image onto an SHC-2000 (`/data` partition layout differs: DualLite `mmcblk0p2` vs Quad `p3`). Convert each SHC-2000 the same way we converted `.179`, then install CRYPT from this repo.
 
-Assign lab IPs later. Until then use names: `crypt-play`, `crypt-work-a`, `crypt-work-b`, `crypt-work-c`. Keep them on `192.168.1.0/24` with this project’s existing “never .40 / .178 / .180” rule.
+Keep them on `192.168.1.0/24` with this project’s existing “never .40 / .178 / .180” rule.
+
+| Name | IP | Chassis | Notes |
+|---|---|---|---|
+| DualLite mule | 192.168.1.179 | SHR-S2-00 DualLite | Lab original. Not one of the four. |
+| First SHC-2000 | 192.168.1.142 | SHC-S2-00 Quad | Converted. Hostname `crypt-001aae0739db0000`. Role TBD. See [HOST-142.md](HOST-142.md). |
+| `crypt-play` / `crypt-work-b` / `crypt-work-c` | TBD | SHC-2000 | Not on the bench yet. |
 
 ## Library model — shard on workers, cache on playback
 
@@ -172,7 +178,7 @@ CRYPT V1.1.7 on DualLite `.179`. Prove APIs: status, clock, report, lyrics, wave
 
 ### 1 — Convert three SHC-2000 workers
 
-Image each Quad correctly (do not clone DualLite eMMC). Install CRYPT. Give each a name and a lab IP. Confirm `GET /api/status` from a laptop. No TOSLINK required on workers. Seed each worker with a **distinct** shard of test files.
+First Quad is up at **192.168.1.142** (`crypt-001aae0739db0000`). Convert two more the same way (do not clone DualLite eMMC). Install CRYPT. Give each a name and a lab IP. Confirm `GET /api/status`. No TOSLINK required on workers. Seed each worker with a **distinct** shard of test files.
 
 ### 2 — Convert the fourth as playback
 
