@@ -14,6 +14,7 @@ import time
 import traceback
 
 from peers import PEERS, _clean_url, _http_json, _http_post, identity, stamp
+import crypt_wire
 
 SYNC_FILE = os.environ.get("CRYPT_SYNC", "/data/crypt/sync.json")
 
@@ -59,6 +60,9 @@ class Unison(object):
         self._follow_url = ""
         self._follow_uid = ""
         self._drift_ms = None
+        self._clock_pkt = None
+        self._clock_at = 0.0
+        self._seq = crypt_wire.now_seq()
         self._thread = None
         self._alive = True
         t = threading.Thread(target=self._loop, name="crypt-unison", daemon=True)
@@ -136,14 +140,80 @@ class Unison(object):
 
         threading.Thread(target=run, daemon=True, name="unison-fan").start()
 
+    def note_clock(self, payload, addr_ip=""):
+        """Apply a CRYPT/1 CLOCK datagram from the conductor."""
+        if not payload or payload.get("kind") != "clock":
+            return
+        uid = str(payload.get("uid") or "")
+        with self.lock:
+            if not self._on or not self._follow_url:
+                return
+            if self._follow_uid and uid and uid != self._follow_uid:
+                return
+            self._clock_pkt = dict(payload)
+            self._clock_at = time.time()
+        player = self.player
+        heard = payload.get("heard")
+        if player is None or heard is None:
+            return
+        local = player.snapshot()
+        if not local.get("playing") or not payload.get("playing"):
+            with self.lock:
+                self._drift_ms = None
+            return
+        player.follow_heard(heard)
+        local_heard = ((player.snapshot().get("clock") or {}).get("heard"))
+        if local_heard is not None:
+            with self.lock:
+                self._drift_ms = int(round((float(heard) - float(local_heard)) * 1000.0))
+
+    def _emit_clock(self):
+        player = self.player
+        if player is None:
+            return
+        snap = player.snapshot()
+        clock = snap.get("clock") or {}
+        me = identity()
+        uid = me.get("uid") or ""
+        if not uid:
+            return
+        state = 2 if clock.get("locked") else (1 if snap.get("playing") else 0)
+        with self.lock:
+            self._seq = (self._seq + 1) & 0xFFFFFFFF
+            seq = self._seq
+        pkt = crypt_wire.encode_clock(
+            uid, seq,
+            heard=clock.get("heard"),
+            mono=time.monotonic(),
+            path=(float(clock.get("latency_ms") or 0) / 1000.0),
+            state=state,
+            playing=bool(snap.get("playing")),
+            unison=True,
+        )
+        PEERS.send_dgram(pkt)
+
     def _loop(self):
         while self._alive:
             with self.lock:
                 url = self._follow_url
                 on = self._on
                 player = self.player
-            if not on or not url or player is None:
+                clock_age = time.time() - self._clock_at if self._clock_at else 999
+            if not on:
                 time.sleep(0.35)
+                continue
+            if not url:
+                if player is not None and player.snapshot().get("playing"):
+                    try:
+                        self._emit_clock()
+                    except Exception:
+                        traceback.print_exc()
+                    time.sleep(0.05)
+                    continue
+                time.sleep(0.35)
+                continue
+            if clock_age <= 0.25:
+                time.sleep(0.05)
                 continue
             try:
                 data = self.get(url + "/api/clock", timeout=2)
@@ -151,7 +221,7 @@ class Unison(object):
                 clock = player_snap.get("clock") or {}
                 heard = clock.get("heard")
                 playing = bool(player_snap.get("playing"))
-                local = player.snapshot()
+                local = player.snapshot() if player is not None else {}
                 if playing and heard is not None and local.get("playing"):
                     player.follow_heard(heard)
                     local_heard = ((player.snapshot().get("clock") or {}).get("heard"))

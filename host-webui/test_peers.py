@@ -258,6 +258,29 @@ class LinkTests(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    def test_fetch_shelf_skips_http_when_libver_matches(self):
+        calls = []
+        tracks = [{"name": "Glow.flac", "size": 12, "mtime": 8}]
+        def fake(url, timeout=20):
+            calls.append(url)
+            return {"ok": True, "tracks": tracks}
+        idx = peers.PeerIndex(path="/no/such.json", http=fake)
+        idx._cfg = {"id": "v", "shelves": [{"id": "s", "url": "http://192.168.1.179"}]}
+        idx.note_beacon({
+            "crypt": 1,
+            "uid": "001AAE10E4090000",
+            "id": "crypt-001aae10e4090000",
+            "host": "crypt-001aae10e4090000",
+            "libver": __import__("crypt_wire").libver(tracks),
+            "tracks": 1,
+        }, "192.168.1.179")
+        a, err = idx.fetch_shelf({"url": "http://192.168.1.179"})
+        self.assertEqual(err, "")
+        self.assertEqual(len(a), 1)
+        b, err = idx.fetch_shelf({"url": "http://192.168.1.179"})
+        self.assertEqual(err, "")
+        self.assertEqual(len(calls), 1)
+
     def test_link_rejects_forbidden_hosts(self):
         idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
         ok, err = idx.link("http://192.168.1.40")

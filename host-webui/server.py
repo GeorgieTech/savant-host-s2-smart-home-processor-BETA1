@@ -202,6 +202,7 @@ def _safe_filename(name):
 
 def _library(local_only=False):
     local = CATALOG.tracks()
+    PEERS.note_local_catalog(local)
     if local_only or not PEERS.config().get("shelves"):
         return PEERS.tag_local(local)
     return PEERS.merge(local)
