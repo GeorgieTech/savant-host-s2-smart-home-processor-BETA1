@@ -238,17 +238,37 @@ def discipline_latency(state, sample, capture=PLL_CAPTURE, hold=PLL_HOLD):
     return state
 
 
-def follow_plan(local_heard, target_heard, hold_s=0.012, seek_s=0.08):
-    """How to keep this TOSLINK Time Clock on another host's heard clock."""
+def follow_plan(
+    local_heard,
+    target_heard,
+    hold_s=0.018,
+    catch_s=0.12,
+    jump_s=1.25,
+    warming=False,
+    last_seek_age=999.0,
+    catch_age=8.0,
+):
+    """How to keep this TOSLINK on another host's heard clock.
+
+    Seek restarts ffmpeg+paplay and unlocks the latency PLL (~400 ms path).
+    Only jump the decoder for a real discontinuity, or one catch-up after
+    the pipeline has filled. Ride CLOCK otherwise — do not chase path delay.
+    """
     try:
         err = float(target_heard) - float(local_heard)
     except (TypeError, ValueError):
         return "hold", 0.0
+    if warming:
+        return "hold", err
     if abs(err) < hold_s:
         return "hold", err
-    if abs(err) >= seek_s:
+    if abs(err) >= jump_s and last_seek_age >= 2.0:
         return "seek", err
-    return "nudge", err
+    if abs(err) >= catch_s and last_seek_age >= catch_age:
+        return "seek", err
+    if err < -hold_s:
+        return "slew", err
+    return "hold", err
 
 
 def discipline_decoder(corr, mono_s, ref_s, alpha=0.12, snap_s=0.35):
@@ -500,7 +520,7 @@ class HostPlayer(object):
             return True
 
     def follow_heard(self, target_heard):
-        """Steer this chassis' Time Clock toward another host's heard position."""
+        """Steer this chassis toward another host's heard position."""
         snap = self.snapshot()
         if not snap.get("playing"):
             return False
@@ -508,18 +528,56 @@ class HostPlayer(object):
         local = clock.get("heard")
         if local is None:
             return False
-        plan, err = follow_plan(local, target_heard)
+        now = time.monotonic()
+        lat = float(clock.get("latency_ms") or 90.0) / 1000.0
+        warming = now < float(self._sync_warm_until or 0.0)
+        plan, err = follow_plan(
+            local,
+            target_heard,
+            warming=warming,
+            last_seek_age=now - float(self._sync_seek_at or 0.0),
+        )
         if plan == "hold":
             return True
-        if plan == "seek":
-            now = time.monotonic()
-            if now - self._sync_seek_at < 2.0:
+        if plan == "slew":
+            now2 = time.monotonic()
+            if now2 - float(self._sync_slew_at or 0.0) < 0.4:
                 return True
+            self._sync_slew_at = now2
+            seconds = min(0.08, abs(float(err)))
+            threading.Thread(
+                target=self._slew_ahead,
+                args=(seconds,),
+                daemon=True,
+                name="unison-slew",
+            ).start()
+            return True
+        if plan == "seek":
             self._sync_seek_at = now
-            lat = float(clock.get("latency_ms") or 90.0) / 1000.0
             return self.seek(max(0.0, float(target_heard) + lat))
+        return True
+
+    def _slew_ahead(self, seconds):
+        """Local optical is ahead: pause the pipe briefly. Do not restart ffmpeg."""
+        seconds = max(0.0, min(0.08, float(seconds or 0.0)))
+        if seconds < 0.008:
+            return True
         with self.lock:
-            self._play_corr = discipline_decoder(self._play_corr or 0.0, local, float(target_heard), alpha=0.22)
+            if self.paused or not self._alive_locked() or self.proc is None:
+                return True
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGSTOP)
+            except Exception:
+                return False
+        time.sleep(seconds)
+        with self.lock:
+            if self.proc is None or self.paused:
+                return True
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGCONT)
+            except Exception:
+                return False
+            self.t0 += seconds
         return True
 
     def seek(self, seconds):
@@ -653,6 +711,8 @@ class HostPlayer(object):
         self._ppm = 0.0
         self._ref_age = 0.0
         self._sync_seek_at = 0.0
+        self._sync_warm_until = 0.0
+        self._sync_slew_at = 0.0
 
     def _mono_locked(self):
         if self.paused or not self._alive_locked():
@@ -708,6 +768,7 @@ class HostPlayer(object):
             "locked": locked,
             "phase": phase,
             "rate": rate,
+            "warming": bool(time.monotonic() < float(self._sync_warm_until or 0.0)),
         }
 
     def _apply_latency_sample(self, sample):
@@ -834,6 +895,8 @@ class HostPlayer(object):
         self._play_corr = 0.0
         self._ppm = 0.0
         self._clock_on = False
+        lat_s = max(0.15, (self._pll["lat_ms"] or 400.0) / 1000.0)
+        self._sync_warm_until = self.t0 + lat_s + 0.12
         self.error = ""
         return True
 

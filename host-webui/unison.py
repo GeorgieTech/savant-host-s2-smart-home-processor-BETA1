@@ -144,7 +144,10 @@ class Unison(object):
         """Apply a CRYPT/1 CLOCK datagram from the conductor."""
         if not payload or payload.get("kind") != "clock":
             return
+        me = identity()
         uid = str(payload.get("uid") or "")
+        if uid and uid == (me.get("uid") or ""):
+            return
         with self.lock:
             if not self._on or not self._follow_url:
                 return
@@ -162,8 +165,9 @@ class Unison(object):
                 self._drift_ms = None
             return
         player.follow_heard(heard)
-        local_heard = ((player.snapshot().get("clock") or {}).get("heard"))
-        if local_heard is not None:
+        local_snap = player.snapshot()
+        local_heard = ((local_snap.get("clock") or {}).get("heard"))
+        if local_heard is not None and not (local_snap.get("clock") or {}).get("warming"):
             with self.lock:
                 self._drift_ms = int(round((float(heard) - float(local_heard)) * 1000.0))
 
@@ -224,8 +228,9 @@ class Unison(object):
                 local = player.snapshot() if player is not None else {}
                 if playing and heard is not None and local.get("playing"):
                     player.follow_heard(heard)
-                    local_heard = ((player.snapshot().get("clock") or {}).get("heard"))
-                    if local_heard is not None:
+                    after = player.snapshot()
+                    local_heard = ((after.get("clock") or {}).get("heard"))
+                    if local_heard is not None and not (after.get("clock") or {}).get("warming"):
                         with self.lock:
                             self._drift_ms = int(round((float(heard) - float(local_heard)) * 1000.0))
                 elif not playing:

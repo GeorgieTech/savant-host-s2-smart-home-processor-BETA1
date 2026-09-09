@@ -77,6 +77,32 @@ Follower `GET /api/clock` every 0.35 s, 2 s timeout, JSON parse, then `follow_he
 
 Play/Pause/Seek stay HTTP for now. Those are rare. Clock is the hot path.
 
+### 3b. V1.1.11 Unison still slapped — follower was seeking, not riding CLOCK
+
+Lab pair, same `Fade Away.flac`, Unison on, both TOSLINKs audible from one spot:
+
+| | DualLite .179 follower | Quad .142 conductor |
+|---|---|---|
+| Time Clock `lat_ms` | 407 | 409 |
+| PLL | still locking | locked |
+| Unison `drift_ms` | hunts, median ~370 ms, −50..+440 | — |
+
+The two **path delays match**. Each room alone is fine. Overlap hears two performances because **heard positions were not held**.
+
+Grok’s V1.1.11 ship (`e6413fa`) did **not** change `follow_heard()`. It kept V1.1.10 policy: **seek when |err| ≥ 80 ms**, cooldown **2 s**, and `seek(target_heard + lat)`. A seek **kills ffmpeg+paplay**, sets `_clock_on = False`, and fills ~400 ms of Pulse again. CLOCK is 20 Hz, so during that fill `_clock_locked` clamps `heard` to the new `offset` (~`lat` ahead). The next tick sees ~400 ms error and, after 2 s, seeks again. DualLite never finishes the 6-sample latency lock. Nudges wrote `_play_corr`, which the decoder PLL immediately undoes — display-only, **not** the optical jack.
+
+That is the slap-back, not paplay vs paplay.
+
+**Fix (this drop):**
+
+- While the pipe is warming (`t0 + lat + 120 ms` after every play/seek), **hold**. A ~400 ms clamp is not a CLOCK error.
+- Catch-up seek at most every **8 s**, and only if |err| ≥ **120 ms**. Jumps ≥ **1.25 s** still seek (user seek / late join).
+- |err| < 18 ms: hold. Local **ahead** 18–80 ms: brief SIGSTOP (no ffmpeg restart). Local **behind** in that band: hold — a seek would cost a full path delay.
+- Do not steal `_play_corr` from the decoder PLL.
+- Turning Unison **on** while the conductor is already playing fans the current **playback** position so the follower does not start the file at 0.
+
+Deploy `player.py`, `unison.py`, `server.py` on **both** hosts, restart `crypt-web`. Expect follower PLL to reach **locked**, `drift_ms` to sit still near 0 (tens of ms, not hundreds), and no 400 ms snaps in the hallway.
+
 ### 4. Library merge refetches the whole catalog
 
 `fetch_shelf()` pulls `GET /api/library?local=1` (up to 2 MiB JSON) with an **8 s** TTL, even when nothing changed. Library page, play, and owner lookup all hit that.
@@ -184,7 +210,7 @@ Restart **.179 and .142 within a minute of each other**. Pulse / hostname units 
 2. Settings → On the LAN still shows the other UID (JSON beacon covers mixed seconds).
 3. After both are up, `python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1/api/hello').read()[:200])"` still returns `crypt:1`.
 4. Link remains two-way. Play a shelf track: still copy then TOSLINK.
-5. Optional Unison: enable on both, play on one, follower drift in Settings should update faster than ~3 Hz. `journalctl -u crypt-web -n 50` must stay free of traceback loops.
+5. Optional Unison, same track, both optical jacks in earshot: follower PLL should **lock**. `drift_ms` should hold near 0, not hunt ±400 ms. A hallway between zones should not sound like two bands.
 
 ### Rollback
 
