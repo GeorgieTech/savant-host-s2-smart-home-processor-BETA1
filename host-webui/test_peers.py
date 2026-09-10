@@ -220,6 +220,140 @@ class HomeMergeTests(unittest.TestCase):
         self.assertEqual(out[0]["home_stamp"], "E409")
 
 
+class HelloContractTests(unittest.TestCase):
+    def test_hello_is_self_libver_linked_uids(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        idx._cfg = {
+            "id": "crypt-viewer",
+            "shelves": [
+                {"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179", "uid": "001AAE10E4090000"},
+                {"id": "crypt-001aae0739db0000", "url": "http://192.168.1.142", "uid": "001AAE0739DB0000"},
+            ],
+        }
+        tracks = [{"name": "Glow.flac", "size": 12, "mtime": 8}]
+        idx.note_local_catalog(tracks)
+        idx.note_beacon({
+            "crypt": 1,
+            "id": "crypt-001aae00abc00000",
+            "uid": "001AAE00ABC00000",
+            "host": "crypt-001aae00abc00000",
+        }, "192.168.1.150")
+        payload = idx.hello({"tracks": 71, "playing": True, "now": "Glow.flac"})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["crypt"], 1)
+        self.assertEqual(payload["id"], "crypt-viewer")
+        self.assertEqual(payload["version"], peers.VERSION)
+        self.assertEqual(payload["libver"], __import__("crypt_wire").libver(tracks))
+        self.assertEqual(payload["linked"], ["001AAE10E4090000", "001AAE0739DB0000"])
+        self.assertEqual(payload["tracks"], 71)
+        self.assertTrue(payload["playing"])
+        self.assertEqual(payload["now"], "Glow.flac")
+        self.assertNotIn("seen", payload)
+        self.assertNotIn("shelves", payload)
+        for key in ("uid", "host", "ip", "url", "model"):
+            self.assertIn(key, payload)
+
+    def test_hello_omits_seen_even_when_roster_is_full(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        idx._cfg = {"id": "crypt-viewer", "shelves": []}
+        for i, ip in enumerate(("192.168.1.150", "192.168.1.151", "192.168.1.152")):
+            uid = "001AAE00ABC%05d" % i
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-%s" % uid.lower(),
+                "uid": uid,
+                "host": "crypt-%s" % uid.lower(),
+            }, ip)
+        payload = idx.hello()
+        self.assertEqual(payload["linked"], [])
+        self.assertNotIn("seen", payload)
+        self.assertNotIn("shelves", payload)
+        self.assertEqual(payload["libver"], 0)
+
+    def test_probe_url_hellos_one_target_and_drops_gossip(self):
+        calls = []
+
+        def fake(url):
+            calls.append(url)
+            return {
+                "ok": True,
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+                "ip": "192.168.1.179",
+                "model": "SHR-S2-00",
+                "version": "1.1.12",
+                "libver": 99,
+                "linked": ["001AAE0739DB0000"],
+                "tracks": 71,
+                "playing": False,
+                "shelves": [{"id": "crypt-third", "uid": "001AAE00ABC00000", "url": "http://192.168.1.150"}],
+                "seen": [{
+                    "id": "crypt-third",
+                    "uid": "001AAE00ABC00000",
+                    "ip": "192.168.1.150",
+                    "url": "http://192.168.1.150",
+                    "model": "SHC-S2-00",
+                }],
+            }
+
+        idx = peers.PeerIndex(path="/no/such.json", http=fake, seen_path="/no/such/seen.json")
+        idx._cfg = {"id": "crypt-viewer", "shelves": []}
+        host, err = idx.probe_url("http://192.168.1.179")
+        self.assertEqual(err, "")
+        self.assertIsNotNone(host)
+        self.assertEqual(host["uid"], "001AAE10E4090000")
+        self.assertEqual(host["tracks"], 71)
+        self.assertEqual(host.get("libver"), 99)
+        self.assertEqual(calls, ["http://192.168.1.179/api/hello"])
+        rows = idx.roster(probe=False)
+        uids = [r.get("uid") for r in rows if r.get("uid")]
+        self.assertIn("001AAE10E4090000", uids)
+        self.assertNotIn("001AAE00ABC00000", uids)
+
+    def test_roster_still_comes_from_beacons_without_hello(self):
+        idx = peers.PeerIndex(
+            path="/no/such.json",
+            http=lambda url: (_ for _ in ()).throw(RuntimeError("hello must not run")),
+            seen_path="/no/such/seen.json",
+        )
+        idx._cfg = {"id": "crypt-viewer", "shelves": []}
+        idx.note_beacon({
+            "crypt": 1,
+            "id": "crypt-001aae10e4090000",
+            "uid": "001AAE10E4090000",
+            "host": "crypt-001aae10e4090000",
+            "v": "1.1.12",
+        }, "192.168.1.179")
+        rows = [r for r in idx.roster(probe=False) if not r.get("self")]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["uid"], "001AAE10E4090000")
+        self.assertTrue(rows[0]["online"])
+        self.assertIn("beacon", rows[0].get("via") or [])
+
+    def test_probe_lists_us_from_linked_uids(self):
+        def fake(url):
+            return {
+                "ok": True,
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+                "ip": "192.168.1.179",
+                "libver": 1,
+                "linked": ["001AAE0739DB0000"],
+                "tracks": 4,
+            }
+
+        idx = peers.PeerIndex(path="/no/such.json", http=fake, seen_path="/no/such/seen.json")
+        idx._cfg = {"id": "crypt-001aae0739db0000", "shelves": []}
+        host, err = idx.probe_url("http://192.168.1.179")
+        self.assertEqual(err, "")
+        self.assertTrue(host["lists_us"])
+        self.assertTrue(host["sees_us"])
+
+
 class LinkTests(unittest.TestCase):
     def test_link_saves_shelf_and_unlink_drops_it(self):
         folder = tempfile.mkdtemp(prefix="crypt-link-")
@@ -240,8 +374,8 @@ class LinkTests(unittest.TestCase):
                     "ip": "192.168.1.179",
                     "model": "SHR-S2-00",
                     "version": "1.1.9",
-                    "shelves": [],
-                    "seen": [],
+                    "libver": 0,
+                    "linked": [],
                     "tracks": 71,
                 }
 

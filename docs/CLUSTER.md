@@ -96,6 +96,8 @@ V1.1.10: A link is two-way (unison catalog). Each library row is stamped with th
 
 V1.1.11: CRYPT/1 multicast on `239.18.20.1:41880` (binary beacon + Unison CLOCK at 20 Hz). JSON broadcast stays as fallback. Library merge skips HTTP when the advertised **libver** matches. See [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
+Hello (`GET /api/hello` in `host-webui/peers.py`) is self + libver + linked UIDs (plus cheap tracks/playing when already in memory). It does not gossip `seen[]`. The Settings roster still comes from CRYPT/1 BEACON (and JSON broadcast while dual-stack lives). Probe may hello **one** URL the operator asked to link. That keeps a four-host farm from becoming an HTTP mesh of the same roster.
+
 V1.1.12: Unison follower **rides CLOCK**. Do not seek on the ~400 ms path-delay error (that restart is the hallway echo). Hold while the pipe fills, catch-up seek at most every 8 s, brief pause if slightly ahead. Turning Unison on mid-track fans the conductor’s current playback position.
 
 ### Copy-then-play
