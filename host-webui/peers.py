@@ -469,6 +469,7 @@ class PeerIndex(object):
         self.igmp_error = ""
         self._igmp_iface = ""
         self._igmp_pending_rejoin = False
+        self._igmp_rejoined = False
         self.error = ""
         self._own_libver = 0
         self._own_tracks = 0
@@ -1107,6 +1108,8 @@ class PeerIndex(object):
                 "error": self.beacon_error,
                 "igmp_ok": bool(self.igmp_ok),
                 "igmp_error": self.igmp_error,
+                "igmp_iface": self._igmp_iface,
+                "igmp_rejoined": bool(self._igmp_rejoined),
             },
             "error": self.error,
         }
@@ -1308,12 +1311,27 @@ class PeerIndex(object):
         self._igmp_iface = iface
         return True
 
+    def _leave_igmp(self, sock, iface):
+        """Best-effort DROP. OSError swallowed — membership may already be gone."""
+        try:
+            crypt_wire.leave_group(sock, iface=iface)
+        except OSError:
+            pass
+
     def _maybe_deferred_igmp_rejoin(self):
         """One rejoin when _lan_ip() flips to 192.168.1.* after start().
 
         Samples only on the existing 2 s beacon cadence while pending, so
         DualLite is not woken by a new thread or a high-rate ioctl loop.
         After one attempt, pending is cleared even if the rejoin fails.
+
+        Path (A): before ADD, leave both 0.0.0.0 and the new LAN IP. Linux
+        IP_DROP_MEMBERSHIP matches the exact imr_interface used at ADD; a
+        0.0.0.0 leave can no-op if the kernel bound membership via routing
+        at first join, then ADD with 192.168.1.* would leave dual ANY+specific
+        until systemctl restart crypt-web. Keep the existing UDP sock for
+        beacon continuity; recreate (B) only if leave-both is still sticky
+        in lab.
         """
         if not self._igmp_pending_rejoin:
             return
@@ -1324,12 +1342,13 @@ class PeerIndex(object):
         if not ip:
             return
         self._igmp_pending_rejoin = False
-        old = self._igmp_iface
-        if old and old != ip:
-            try:
-                crypt_wire.leave_group(sock, iface=old)
-            except OSError:
-                pass
+        ifaces = []
+        for iface in ("0.0.0.0", ip):
+            if iface and iface not in ifaces:
+                ifaces.append(iface)
+        for iface in ifaces:
+            self._leave_igmp(sock, iface)
+        self._igmp_rejoined = True
         self._join_igmp(sock, ip)
 
     def send_dgram(self, blob, dest=None):

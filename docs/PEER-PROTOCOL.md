@@ -18,7 +18,7 @@ This cloud agent cannot complete a two-host LAN conversation. UDP probes to `:41
 
 Lab confirmation after deploy — first-class check on **both** hosts (as `RPM`). `ss` plus a join-group recv of `CRPT` is required; send-to-group does not prove membership (`IP_MULTICAST_LOOP` is 0). Settings must show `beacon.igmp_error` if `IP_ADD_MEMBERSHIP` failed.
 
-Beta1 `PeerIndex.start()` is still one-shot. `crypt-web.service` is `After=`/`Wants=network-online.target` (not `Requires=`). Yocto wait-online can leave `_lan_ip()` empty, so `join_group(..., "0.0.0.0")` lands on INADDR_ANY with no `IP_MULTICAST_IF`, or fails, until DHCP assigns `eth0` `192.168.1.*`. A **single** deferred rejoin then runs: drop the old membership if needed, `join_group` with the real iface, sticky `igmp_*` updated the same way as send-vs-join (never cleared by beacon send). `_lan_ip()` is sampled only on the existing 2 s beacon cadence while that rejoin is pending — not a high-rate loop. eth0 flap still wants `systemctl restart crypt-web`.
+Beta1 `PeerIndex.start()` is still one-shot. `crypt-web.service` is `After=`/`Wants=network-online.target` (not `Requires=`). Yocto wait-online can leave `_lan_ip()` empty, so `join_group(..., "0.0.0.0")` lands on INADDR_ANY with no `IP_MULTICAST_IF`, or fails, until DHCP assigns `eth0` `192.168.1.*`. A **single** deferred rejoin then runs on the **existing** UDP sock: best-effort `leave_group` for **both** `0.0.0.0` and the new `192.168.1.*` (Linux `IP_DROP_MEMBERSHIP` matches the exact ADD iface; an ANY leave can no-op while membership lingers, then a concrete ADD would leave dual ANY+specific until `systemctl restart crypt-web`), then `join_group` with the real iface + `IP_MULTICAST_IF`. Sticky `igmp_*` is updated the same way as send-vs-join (never cleared by beacon send). Fleet exposes `beacon.igmp_iface` (and `beacon.igmp_rejoined` after that one attempt). `_lan_ip()` is sampled only on the existing 2 s beacon cadence while that rejoin is pending — not a high-rate loop. eth0 flap still wants `systemctl restart crypt-web`.
 
 ```sh
 ss -ulnp | grep 41880
@@ -177,7 +177,7 @@ Multicast is the right default on this VLAN. Unicast CLOCK to the linked peer IP
 | File | Role |
 |---|---|
 | `host-webui/crypt_wire.py` | **New.** Encode/decode, FNV libver, IGMP `join_group` / `leave_group`. |
-| `host-webui/peers.py` | Dual-stack beacon, libver short-circuit on `fetch_shelf`, `send_dgram`. Join failure is `beacon.igmp_*` and is not cleared by send. One deferred rejoin when `_lan_ip()` appears after a `0.0.0.0`/failed first join. |
+| `host-webui/peers.py` | Dual-stack beacon, libver short-circuit on `fetch_shelf`, `send_dgram`. Join failure is `beacon.igmp_*` and is not cleared by send. One deferred rejoin when `_lan_ip()` appears after a `0.0.0.0`/failed first join: leave both ANY and the new IP, then concrete join on the existing sock. Fleet `beacon.igmp_iface` / `igmp_rejoined`. |
 | `host-webui/unison.py` | CLOCK emit 50 ms; UDP `note_clock`; HTTP `/api/clock` if UDP goes quiet. Snapshot `via` is `udp` or `http-clock`. |
 | `host-webui/settings.html` | Paints `beacon.igmp_error` so Settings can show join failed while send still looks Live. |
 | `host-webui/server.py` | `PEERS.note_local_catalog()` so beacons carry a real libver. |
