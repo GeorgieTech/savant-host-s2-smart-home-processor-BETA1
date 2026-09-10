@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import socket
 import tempfile
 import unittest
 
@@ -58,43 +59,256 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(out[0]["owner"], "crypt-shelf")
 
 
+class ParseContentRangeTests(unittest.TestCase):
+    def test_partial_and_unsatisfied(self):
+        self.assertEqual(peers._parse_content_range("bytes 4-7/8"), (4, 7, 8))
+        self.assertEqual(peers._parse_content_range("bytes */8"), (None, None, 8))
+        self.assertEqual(peers._parse_content_range(""), (None, None, None))
+        self.assertEqual(peers._parse_content_range("bytes=10-99/200"), (10, 99, 200))
+
+
+class _FakeHeaders(dict):
+    def get(self, key, default=None):
+        for name, val in dict.items(self):
+            if str(name).lower() == str(key).lower():
+                return val
+        return default
+
+
+class _FakeFH(object):
+    def __init__(self, body, code=200, headers=None, hiccup_after=None):
+        self._body = body
+        self._off = 0
+        self._code = code
+        self.headers = _FakeHeaders(headers or {})
+        self._hiccup_after = hiccup_after
+        self._reads = 0
+
+    def getcode(self):
+        return self._code
+
+    def read(self, n=-1):
+        if self._hiccup_after is not None and self._off >= self._hiccup_after:
+            raise socket.timeout("timed out")
+        if self._off >= len(self._body):
+            return b""
+        end = len(self._body)
+        if self._hiccup_after is not None:
+            end = min(end, self._hiccup_after)
+        if n is None or n < 0:
+            take = end - self._off
+        else:
+            take = min(n, end - self._off)
+        chunk = self._body[self._off:self._off + take]
+        self._off += len(chunk)
+        self._reads += 1
+        return chunk
+
+    def close(self):
+        pass
+
+
 class EnsureTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.mkdtemp(prefix="crypt-music-")
+        self._old_music = peers.MUSIC_DIR
+        peers.MUSIC_DIR = self.folder
+        self._orig_urlopen = peers.urlopen
+        self.calls = []
+
+    def tearDown(self):
+        peers.urlopen = self._orig_urlopen
+        peers.MUSIC_DIR = self._old_music
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def _index(self, tracks=None):
+        tracks = tracks if tracks is not None else [{"name": "Glow.wav", "size": 8}]
+        def fake_http(url, timeout=20):
+            return {"ok": True, "tracks": tracks}
+        idx = peers.PeerIndex(
+            path="/no/such.json",
+            http=fake_http,
+            hot_path=os.path.join(self.folder, "hot.json"),
+        )
+        idx._cfg = {"id": "v", "shelves": [{"id": "s", "url": "http://192.168.1.179"}]}
+        return idx
+
+    def _install_open(self, handler):
+        def fake_open(req, timeout=30):
+            rng = req.get_header("Range") if hasattr(req, "get_header") else None
+            url = req.get_full_url() if hasattr(req, "get_full_url") else str(req)
+            self.calls.append({"url": url, "range": rng, "timeout": timeout})
+            return handler(req, rng)
+        peers.urlopen = fake_open
+
     def test_ensure_writes_file(self):
-        folder = tempfile.mkdtemp(prefix="crypt-music-")
-        old = peers.MUSIC_DIR
-        peers.MUSIC_DIR = folder
-        try:
-            calls = []
-            def fake_http(url):
-                return {"ok": True, "tracks": [{"name": "Glow.wav"}]}
-            idx = peers.PeerIndex(path="/no/such.json", http=fake_http, hot_path=os.path.join(folder, "hot.json"))
-            idx._cfg = {"id": "v", "shelves": [{"id": "s", "url": "http://192.168.1.179"}]}
-            orig_urlopen = peers.urlopen
-            class FakeFH(object):
-                def read(self, n=-1):
-                    if getattr(self, "done", False):
-                        return b""
-                    self.done = True
-                    return b"RIFFTEST"
-                def close(self):
-                    pass
-            def fake_open(req, timeout=30):
-                calls.append(req.get_full_url() if hasattr(req, "get_full_url") else str(req))
-                return FakeFH()
-            peers.urlopen = fake_open
-            try:
-                ok = idx.ensure("Glow.wav", owner="s")
-            finally:
-                peers.urlopen = orig_urlopen
-            self.assertTrue(ok)
-            dest = os.path.join(folder, "Glow.wav")
-            self.assertTrue(os.path.isfile(dest))
-            self.assertTrue(idx.is_hot("Glow.wav"))
-            with open(dest, "rb") as fh:
-                self.assertEqual(fh.read(), b"RIFFTEST")
-        finally:
-            peers.MUSIC_DIR = old
-            shutil.rmtree(folder, ignore_errors=True)
+        idx = self._index(tracks=[{"name": "Glow.wav"}])
+        self._install_open(lambda req, rng: _FakeFH(b"RIFFTEST"))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        dest = os.path.join(self.folder, "Glow.wav")
+        self.assertTrue(os.path.isfile(dest))
+        self.assertTrue(idx.is_hot("Glow.wav"))
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+
+    def test_ensure_resumes_part_with_range_206(self):
+        idx = self._index()
+        part = os.path.join(self.folder, "Glow.wav.part")
+        with open(part, "wb") as fh:
+            fh.write(b"RIFF")
+
+        def handler(req, rng):
+            self.assertEqual(rng, "bytes=4-")
+            return _FakeFH(
+                b"TEST",
+                code=206,
+                headers={
+                    "Content-Length": "4",
+                    "Content-Range": "bytes 4-7/8",
+                },
+            )
+
+        self._install_open(handler)
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        dest = os.path.join(self.folder, "Glow.wav")
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+        self.assertFalse(os.path.isfile(part))
+        self.assertEqual(self.calls[0]["range"], "bytes=4-")
+
+    def test_ensure_full_200_restarts_part(self):
+        idx = self._index()
+        part = os.path.join(self.folder, "Glow.wav.part")
+        with open(part, "wb") as fh:
+            fh.write(b"RIFF")
+
+        def handler(req, rng):
+            self.assertEqual(rng, "bytes=4-")
+            return _FakeFH(
+                b"RIFFTEST",
+                code=200,
+                headers={"Content-Length": "8"},
+            )
+
+        self._install_open(handler)
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        with open(os.path.join(self.folder, "Glow.wav"), "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+
+    def test_ensure_keeps_part_on_hiccup(self):
+        idx = self._index()
+        self._install_open(lambda req, rng: _FakeFH(
+            b"RIFFTEST",
+            headers={"Content-Length": "8"},
+            hiccup_after=4,
+        ))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertFalse(ok)
+        dest = os.path.join(self.folder, "Glow.wav")
+        part = os.path.join(self.folder, "Glow.wav.part")
+        self.assertFalse(os.path.isfile(dest))
+        self.assertTrue(os.path.isfile(part))
+        with open(part, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFF")
+
+    def test_ensure_resumes_after_hiccup(self):
+        idx = self._index()
+        bodies = [
+            _FakeFH(b"RIFFTEST", headers={"Content-Length": "8"}, hiccup_after=4),
+            _FakeFH(
+                b"TEST",
+                code=206,
+                headers={"Content-Length": "4", "Content-Range": "bytes 4-7/8"},
+            ),
+        ]
+
+        def handler(req, rng):
+            return bodies.pop(0)
+
+        self._install_open(handler)
+        self.assertFalse(idx.ensure("Glow.wav", owner="s"))
+        part = os.path.join(self.folder, "Glow.wav.part")
+        self.assertTrue(os.path.isfile(part))
+        self.assertTrue(idx.ensure("Glow.wav", owner="s"))
+        dest = os.path.join(self.folder, "Glow.wav")
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+        self.assertFalse(os.path.isfile(part))
+        self.assertEqual(self.calls[0]["range"], None)
+        self.assertEqual(self.calls[1]["range"], "bytes=4-")
+
+    def test_ensure_rejects_size_mismatch(self):
+        idx = self._index(tracks=[{"name": "Glow.wav", "size": 99}])
+        self._install_open(lambda req, rng: _FakeFH(
+            b"RIFFTEST",
+            headers={"Content-Length": "8"},
+        ))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertFalse(ok)
+        self.assertFalse(os.path.isfile(os.path.join(self.folder, "Glow.wav")))
+        self.assertFalse(os.path.isfile(os.path.join(self.folder, "Glow.wav.part")))
+
+    def test_ensure_skips_dest_when_size_matches(self):
+        idx = self._index()
+        dest = os.path.join(self.folder, "Glow.wav")
+        with open(dest, "wb") as fh:
+            fh.write(b"RIFFTEST")
+        self._install_open(lambda req, rng: (_ for _ in ()).throw(AssertionError("should not fetch")))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        self.assertEqual(self.calls, [])
+
+    def test_ensure_recopies_dest_when_size_mismatches(self):
+        idx = self._index()
+        dest = os.path.join(self.folder, "Glow.wav")
+        with open(dest, "wb") as fh:
+            fh.write(b"NO")
+        self._install_open(lambda req, rng: _FakeFH(
+            b"RIFFTEST",
+            headers={"Content-Length": "8"},
+        ))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+        self.assertTrue(self.calls)
+
+    def test_ensure_promotes_complete_part_without_fetch(self):
+        idx = self._index()
+        part = os.path.join(self.folder, "Glow.wav.part")
+        with open(part, "wb") as fh:
+            fh.write(b"RIFFTEST")
+        self._install_open(lambda req, rng: (_ for _ in ()).throw(AssertionError("should not fetch")))
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        dest = os.path.join(self.folder, "Glow.wav")
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
+        self.assertFalse(os.path.isfile(part))
+        self.assertEqual(self.calls, [])
+
+    def test_ensure_416_complete_part_promotes(self):
+        idx = self._index()
+        # Catalog size unknown so we cannot short-circuit; server says we already have all bytes.
+        idx = self._index(tracks=[{"name": "Glow.wav"}])
+        part = os.path.join(self.folder, "Glow.wav.part")
+        with open(part, "wb") as fh:
+            fh.write(b"RIFFTEST")
+
+        def handler(req, rng):
+            hdrs = _FakeHeaders({"Content-Range": "bytes */8"})
+            raise peers.HTTPError(
+                req.get_full_url(), 416, "Range Not Satisfiable", hdrs, None,
+            )
+
+        self._install_open(handler)
+        ok = idx.ensure("Glow.wav", owner="s")
+        self.assertTrue(ok)
+        with open(os.path.join(self.folder, "Glow.wav"), "rb") as fh:
+            self.assertEqual(fh.read(), b"RIFFTEST")
 
 
 class IdentityTests(unittest.TestCase):

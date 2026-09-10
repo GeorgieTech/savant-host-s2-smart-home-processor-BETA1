@@ -18,10 +18,11 @@ import time
 try:
     from urllib.parse import quote, urlparse
     from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
 except ImportError:
     from urllib import quote
     from urlparse import urlparse
-    from urllib2 import Request, urlopen
+    from urllib2 import Request, urlopen, HTTPError
 
 from player import MUSIC_DIR
 import crypt_wire
@@ -301,6 +302,126 @@ def _safe_rel(name):
     if ext not in AUDIO_EXT:
         return ""
     return rel
+
+
+def _file_size(path):
+    try:
+        return int(os.path.getsize(path))
+    except (OSError, TypeError, ValueError):
+        return 0
+
+
+def _http_status(fh):
+    code = getattr(fh, "status", None)
+    if code is None and hasattr(fh, "getcode"):
+        try:
+            code = fh.getcode()
+        except Exception:
+            code = None
+    try:
+        return int(code or 200)
+    except (TypeError, ValueError):
+        return 200
+
+
+def _http_header(fh, name):
+    headers = getattr(fh, "headers", None)
+    if headers is None and hasattr(fh, "info"):
+        try:
+            headers = fh.info()
+        except Exception:
+            headers = None
+    if not headers:
+        return ""
+    val = None
+    try:
+        val = headers.get(name)
+        if val is None:
+            val = headers.get(name.lower())
+        if val is None and hasattr(headers, "getheader"):
+            val = headers.getheader(name)
+    except Exception:
+        val = None
+    if isinstance(val, (list, tuple)):
+        val = val[0] if val else ""
+    return str(val or "").strip()
+
+
+def _header_int(fh, name):
+    raw = _http_header(fh, name)
+    if not raw:
+        return None
+    try:
+        return int(raw.split(";", 1)[0].strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_content_range(value):
+    """Return (start, end, total) from a Content-Range value. Missing parts are None."""
+    text = str(value or "").strip()
+    if not text:
+        return None, None, None
+    low = text.lower()
+    if low.startswith("bytes"):
+        text = text[5:].strip()
+        if text.startswith("="):
+            text = text[1:].strip()
+    span, sep, total_s = text.partition("/")
+    total = None
+    if sep:
+        try:
+            total = int(total_s)
+        except (TypeError, ValueError):
+            total = None
+        if total is not None and total < 0:
+            total = None
+    span = span.strip()
+    if not span or span == "*":
+        return None, None, total
+    start_s, _, end_s = span.partition("-")
+    try:
+        start = int(start_s)
+    except (TypeError, ValueError):
+        return None, None, total
+    end = None
+    if end_s:
+        try:
+            end = int(end_s)
+        except (TypeError, ValueError):
+            end = None
+    return start, end, total
+
+
+def _open_media(url, offset=0):
+    headers = {"User-Agent": CLIENT}
+    if offset > 0:
+        headers["Range"] = "bytes=%s-" % int(offset)
+    req = Request(url, headers=headers)
+    return urlopen(req, timeout=30)
+
+
+def _write_copy(fh, tmp, offset):
+    mode = "ab" if offset > 0 else "wb"
+    written = int(offset or 0)
+    with open(tmp, mode) as out:
+        while True:
+            chunk = fh.read(256 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_COPY:
+                raise IOError("too large")
+            out.write(chunk)
+    return written
+
+
+def _promote_part(tmp, dest):
+    os.replace(tmp, dest)
+    try:
+        os.chmod(dest, 0o644)
+    except OSError:
+        pass
 
 
 def _blank_host():
@@ -869,14 +990,59 @@ class PeerIndex(object):
                     return shelf.get("url")
         return ""
 
+    def _catalog_size(self, name, owner=None):
+        """Bytes from the shelf row, or 0 if the catalog has no size."""
+        cfg = self.config()
+        shelves = list(cfg.get("shelves") or [])
+        if owner:
+            url = self.url_for_owner(owner)
+            preferred = []
+            rest = []
+            for shelf in shelves:
+                host = urlparse(shelf.get("url") or "").hostname or ""
+                if owner in (shelf.get("id"), shelf.get("url"), host, shelf.get("uid")) or (
+                    url and shelf.get("url") == url
+                ):
+                    preferred.append(shelf)
+                else:
+                    rest.append(shelf)
+            shelves = preferred + rest
+        for shelf in shelves:
+            tracks, err = self.fetch_shelf(shelf)
+            if err:
+                continue
+            for t in tracks:
+                if (t or {}).get("name") != name:
+                    continue
+                try:
+                    size = int(t.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                if size > 0:
+                    return size
+        return 0
+
     def ensure(self, name, owner=None):
-        """Copy a remote track into MUSIC_DIR if it is not already here."""
+        """Copy a remote track into MUSIC_DIR if it is not already here.
+
+        Copy-then-play: never stream into ffmpeg. Resume an existing `.part`
+        with HTTP Range. After the copy, size must match the catalog row
+        and/or Content-Length (Content-Range total on 206).
+        """
         rel = _safe_rel(name)
         if not rel:
             return False
         dest = os.path.join(MUSIC_DIR, rel)
+        tmp = dest + ".part"
+        expected = self._catalog_size(rel, owner=owner)
         if os.path.isfile(dest):
-            return True
+            got = _file_size(dest)
+            if expected <= 0 or got == expected:
+                return True
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
         url = self.owner_url(rel, owner=owner)
         if not url:
             return False
@@ -884,34 +1050,105 @@ class PeerIndex(object):
         if folder:
             os.makedirs(folder, exist_ok=True)
         media = url + "/api/media?name=" + quote(rel)
-        tmp = dest + ".part"
+        keep_part = True
         try:
-            req = Request(media, headers={"User-Agent": CLIENT})
-            fh = urlopen(req, timeout=30)
+            offset = _file_size(tmp) if os.path.isfile(tmp) else 0
+            if offset > MAX_COPY or (expected > 0 and offset > expected):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                offset = 0
+            if offset > 0 and expected > 0 and offset == expected:
+                _promote_part(tmp, dest)
+                self.mark_hot(rel)
+                return True
+
+            fh = None
             try:
-                written = 0
-                with open(tmp, "wb") as out:
-                    while True:
-                        chunk = fh.read(256 * 1024)
-                        if not chunk:
-                            break
-                        written += len(chunk)
-                        if written > MAX_COPY:
-                            raise IOError("too large")
-                        out.write(chunk)
+                fh = _open_media(media, offset)
+            except HTTPError as err:
+                if offset > 0 and err.code == 416:
+                    total = _parse_content_range(_http_header(err, "Content-Range"))[2]
+                    if total and offset == total and (expected <= 0 or offset == expected):
+                        _promote_part(tmp, dest)
+                        self.mark_hot(rel)
+                        return True
+                if offset > 0 and err.code in (400, 416, 501):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    offset = 0
+                    fh = _open_media(media, 0)
+                else:
+                    raise
+            try:
+                code = _http_status(fh)
+                clen = _header_int(fh, "Content-Length")
+                cr_start, _, cr_total = _parse_content_range(
+                    _http_header(fh, "Content-Range")
+                )
+                if offset > 0 and code == 206:
+                    if cr_start is not None and cr_start != offset:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                        offset = 0
+                        fh.close()
+                        fh = _open_media(media, 0)
+                        code = _http_status(fh)
+                        clen = _header_int(fh, "Content-Length")
+                        cr_start, _, cr_total = _parse_content_range(
+                            _http_header(fh, "Content-Range")
+                        )
+                if offset > 0 and code != 206:
+                    offset = 0
+                try:
+                    written = _write_copy(fh, tmp, offset)
+                except IOError as exc:
+                    if str(exc) == "too large":
+                        keep_part = False
+                    raise
             finally:
-                fh.close()
+                if fh is not None:
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
+
             if written <= 0:
+                keep_part = False
                 raise IOError("empty")
-            os.replace(tmp, dest)
-            os.chmod(dest, 0o644)
+            final = _file_size(tmp)
+            want = expected
+            if code == 206 and cr_total:
+                if want and cr_total != want:
+                    keep_part = False
+                    raise IOError("size mismatch")
+                want = cr_total
+            elif clen is not None and clen > 0 and code != 206:
+                if want and clen != want:
+                    keep_part = False
+                    raise IOError("size mismatch")
+                if not want:
+                    want = clen
+            if want and final != want:
+                keep_part = False
+                raise IOError("size mismatch")
+            if expected > 0 and final != expected:
+                keep_part = False
+                raise IOError("size mismatch")
+            _promote_part(tmp, dest)
             self.mark_hot(rel)
             return True
         except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+            if not keep_part or _file_size(tmp) <= 0:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
             return False
 
     def _mine(self, me):

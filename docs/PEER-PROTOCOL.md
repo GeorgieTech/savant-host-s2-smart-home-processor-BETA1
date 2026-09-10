@@ -109,11 +109,9 @@ Deploy `player.py`, `unison.py`, `server.py` on **both** hosts, restart `crypt-w
 
 **Fix:** each beacon carries a 64-bit **libver** (FNV-1a of `name:size:mtime` rows). If the advertised libver matches the last successful fetch, skip HTTP. First fetch still happens; file changes flip libver.
 
-### 5. Copy path has no resume and no verify
+### 5. Copy path resumes `.part` and checks size
 
-`ensure()` uses a 30 s `urlopen`, 256 KiB chunks, no `Range`, no hash. A DualLite hiccup leaves `.part` deleted and retries from byte 0.
-
-**Fix (phase 2, after CRYPT/1 is live):** `Range` resume on `.part`, compare `Content-Length` / size from the catalog row, keep copy-then-play (never stream into ffmpeg). Not required to ship CLOCK/beacon.
+`ensure()` still uses a 30 s `urlopen` and 256 KiB chunks. Copy-then-play stays: never stream into ffmpeg. A DualLite hiccup **keeps** `.part`. The next `ensure()` sends `Range: bytes=N-` and appends on HTTP `206`, or restarts the file on a full `200`. After EOF, `.part` length must match the catalog row size and/or `Content-Length` (`Content-Range` total on 206) before the atomic rename. An existing dest is trusted only when its size matches the shelf row (unknown catalog size still short-circuits). No content hash.
 
 ### 6. Hello gossip grows
 
@@ -228,10 +226,11 @@ Copy the V1.1.10 `peers.py` / `unison.py` / `server.py` back and **delete** `/da
 ## Phase 2 (do not block this deploy)
 
 - Drop JSON broadcast once both hosts have been on CRYPT/1 for a week.
-- HTTP `Range` resume on `ensure()`.
 - Slim `/api/hello` (no gossip `seen` blob).
 - Prefetch **next** hot-cache file on the listening host (CLUSTER.md).
 - Optional unicast CLOCK to the linked IPv4 in addition to the group.
+
+HTTP `Range` resume + size check on `ensure()` is implemented (still copy-then-play). That does **not** change Unison CLOCK / seek policy.
 
 ## Tests before deploy
 
