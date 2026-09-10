@@ -71,6 +71,7 @@ class MulticastHelperTests(unittest.TestCase):
         try:
             sock.bind(("0.0.0.0", 0))
             w.join_group(sock, iface="0.0.0.0")
+            w.leave_group(sock, iface="0.0.0.0")
         finally:
             sock.close()
 

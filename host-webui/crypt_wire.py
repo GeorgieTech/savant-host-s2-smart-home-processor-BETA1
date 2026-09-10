@@ -229,5 +229,11 @@ def join_group(sock, group=GROUP, iface="0.0.0.0"):
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(iface))
 
 
+def leave_group(sock, group=GROUP, iface="0.0.0.0"):
+    """Best-effort IGMP drop before a deferred rejoin on a real LAN iface."""
+    mreq = struct.pack("4s4s", socket.inet_aton(group), socket.inet_aton(iface))
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
+
+
 def now_seq():
     return int(time.time() * 1000) & 0xFFFFFFFF
