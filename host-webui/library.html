@@ -186,14 +186,58 @@ function playlistTracks(pl) {
   return (pl.tracks || []).map((n) => by[n]).filter(Boolean);
 }
 
+function isRemote(t) {
+  if (!t) return false;
+  if (t.local === false) return true;
+  if (t.here === false && t.local !== true) return true;
+  return false;
+}
+function copyStamp(t) {
+  return (t && (t.home_stamp || t.owner)) || "shelf";
+}
+async function playRemote(row, requestFn) {
+  if (jobBusy) return;
+  const remote = isRemote(row);
+  if (remote) {
+    startJob("Copying", "Copying from " + copyStamp(row) + "…");
+    $("job-fill").classList.add("indeterminate");
+    const started = Date.now();
+    const pulse = setInterval(() => {
+      if (!jobBusy) return;
+      const sec = (Date.now() - started) / 1000;
+      paintJob(Math.min(88, 8 + sec * 10), "Copying", $("job-detail").textContent, "Copy-then-play — stay on this page.", "");
+      $("job-fill").classList.add("indeterminate");
+    }, 400);
+    try {
+      const res = await requestFn();
+      clearInterval(pulse);
+      $("job-fill").classList.remove("indeterminate");
+      if (res && res.ok === false) {
+        finishJob(false, "Failed", res.error || "could not copy from shelf");
+        $("err").textContent = res.error || "could not copy from shelf";
+      } else {
+        finishJob(true, "Ready", row ? (row.title || titleOf(row)) : "Playing from this host");
+        $("err").textContent = "";
+      }
+    } catch (err) {
+      clearInterval(pulse);
+      $("job-fill").classList.remove("indeterminate");
+      finishJob(false, "Failed", "Host is not answering");
+      $("err").textContent = "Host is not answering";
+    }
+    tick(true);
+    return;
+  }
+  const res = await requestFn();
+  if (res && res.ok === false) $("err").textContent = res.error || "";
+  tick();
+}
 async function playList(list, start) {
   const names = (list || []).map((t) => t.name).filter(Boolean);
   if (!names.length) return;
   const name = start || names[0];
   const row = (list || []).filter((t) => t.name === name)[0];
-  if (row && row.local === false) $("err").textContent = "Copying from shelf…";
-  await api("/api/play", { name: name, order: names });
-  tick();
+  await playRemote(row, () => api("/api/play", { name: name, order: names }));
 }
 async function delName(name, ev) {
   ev.stopPropagation();
@@ -468,7 +512,11 @@ function render() {
       li.innerHTML = "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
       const play = document.createElement("button");
       play.textContent = "Play";
-      play.onclick = (e) => { e.stopPropagation(); api("/api/play", { playlist: p.id }).then(() => tick()); };
+      play.onclick = (e) => {
+        e.stopPropagation();
+        const first = playlistTracks(p)[0];
+        playRemote(first, () => api("/api/play", { playlist: p.id }));
+      };
       const del = document.createElement("button");
       del.textContent = "Delete";
       del.onclick = async (e) => {
@@ -613,10 +661,12 @@ function startJob(title, detail) {
   if (jobTimer) clearTimeout(jobTimer);
   showJob();
   setJobBusy(true);
+  $("job-fill").classList.remove("indeterminate");
   paintJob(0, title, detail, "Do not refresh or leave this page until this finishes.", "");
 }
 function finishJob(ok, title, detail) {
   setJobBusy(false);
+  $("job-fill").classList.remove("indeterminate");
   paintJob(100, title, detail, ok ? "Complete. You can leave this page." : "Finished with errors. You can leave this page.", ok ? "done" : "fail");
   hideJobLater();
 }
@@ -743,8 +793,7 @@ async function tick(force) {
     if (shelves.length) {
       const label = shelves.map((s) => s.id || s.url).join(", ");
       shelfHint.hidden = false;
-      shelfHint.textContent = "Unison catalog with " + label + ". The stamp on each track is the chassis that holds the file. Play copies here, then this TOSLINK.";
-      if (peer.error) $("err").textContent = peer.error;
+      shelfHint.textContent = "Linked shelf with " + label + ". The stamp on each track is the chassis that holds the file. Play copies here, then this TOSLINK. Unison optical is a separate switch on Settings.";
     } else {
       shelfHint.hidden = true;
     }
@@ -752,7 +801,9 @@ async function tick(force) {
     const n = (lib.tracks || []).length;
     const scan = lib.scanning ? " · reading tags" : "";
     $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
-    $("err").textContent = "";
+    if (!jobBusy) {
+      $("err").textContent = (st.player && st.player.error) || peer.error || "";
+    }
     const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
     const homes = (lib.tracks || []).map((t) => (t.home_stamp || "") + (t.here ? "h" : "")).join("");
     const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",") + ":" + homes;
