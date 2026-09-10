@@ -75,7 +75,7 @@ Follower `GET /api/clock` every 0.35 s, 2 s timeout, JSON parse, then `follow_he
 
 **Fix:** conductor emits a **CLOCK** datagram on the same multicast group every **50 ms** while Unison is on and it is playing. Follower applies `follow_heard()` from UDP. HTTP `/api/clock` remains the fallback if no CLOCK packet arrives for 250 ms (mixed-version or IGMP miss).
 
-Play/Pause/Seek stay HTTP for now. Those are rare. Clock is the hot path.
+Play/Pause/Seek/Stop stay HTTP for now. Those are rare. Clock is the hot path. CLOCK silence is **not** pause (Wi‑Fi blips must not false-pause). If CLOCK is quiet, the follower GETs `/api/clock`: pause or stop local paplay only when the conductor reports `playing: false` while this host is Unison-following and still playing; if `/api/clock` is unreachable, hold last state.
 
 ### 3b. V1.1.11 Unison still slapped — follower was seeking, not riding CLOCK
 
@@ -239,4 +239,5 @@ Copy the V1.1.10 `peers.py` / `unison.py` / `server.py` back and **delete** `/da
 python3 host-webui/test_crypt_wire.py
 python3 host-webui/test_peers.py
 python3 host-webui/test_clock.py
+python3 host-webui/test_unison.py
 ```
