@@ -339,6 +339,8 @@ class IgmpJoinTests(unittest.TestCase):
         self.assertFalse(beacon["listening"])
         self.assertFalse(beacon["igmp_ok"])
         self.assertEqual(beacon["igmp_error"], "")
+        self.assertEqual(beacon["igmp_iface"], "")
+        self.assertFalse(beacon["igmp_rejoined"])
         self.assertEqual(beacon["error"], "")
 
     def _patch_start(self, fake, join, lan_ip="192.168.1.179", leave=None):
@@ -391,6 +393,7 @@ class IgmpJoinTests(unittest.TestCase):
             self.assertTrue(beacon["listening"])
             self.assertFalse(beacon["igmp_ok"])
             self.assertIn("No such device", beacon["igmp_error"])
+            self.assertEqual(beacon["igmp_iface"], "192.168.1.179")
         finally:
             idx.stop()
             self._unpatch_start(orig)
@@ -412,9 +415,15 @@ class IgmpJoinTests(unittest.TestCase):
             beacon = idx.fleet()["beacon"]
             self.assertTrue(beacon["igmp_ok"])
             self.assertEqual(beacon["igmp_error"], "")
+            self.assertEqual(beacon["igmp_iface"], "192.168.1.179")
+            self.assertFalse(beacon["igmp_rejoined"])
         finally:
             idx.stop()
             self._unpatch_start(orig)
+
+    def _assert_leave_both(self, leaves, ip):
+        self.assertEqual(set(leaves), {"0.0.0.0", ip})
+        self.assertEqual(len(leaves), 2)
 
     def test_empty_lan_ip_then_ip_appears_rejoins_once(self):
         idx = self._index()
@@ -440,16 +449,19 @@ class IgmpJoinTests(unittest.TestCase):
             while len(joins) < 2 and time.time() < deadline:
                 time.sleep(0.02)
             self.assertEqual(joins, ["0.0.0.0", "192.168.1.179"])
-            self.assertEqual(leaves, ["0.0.0.0"])
+            self._assert_leave_both(leaves, "192.168.1.179")
             self.assertTrue(idx.igmp_ok)
             self.assertEqual(idx.igmp_error, "")
             self.assertFalse(idx._igmp_pending_rejoin)
+            self.assertTrue(idx._igmp_rejoined)
             time.sleep(2.2)
             self.assertEqual(joins, ["0.0.0.0", "192.168.1.179"])
-            self.assertEqual(leaves, ["0.0.0.0"])
+            self._assert_leave_both(leaves, "192.168.1.179")
             beacon = idx.fleet()["beacon"]
             self.assertTrue(beacon["igmp_ok"])
             self.assertEqual(beacon["igmp_error"], "")
+            self.assertEqual(beacon["igmp_iface"], "192.168.1.179")
+            self.assertTrue(beacon["igmp_rejoined"])
         finally:
             idx.stop()
             self._unpatch_start(orig)
@@ -482,6 +494,8 @@ class IgmpJoinTests(unittest.TestCase):
             beacon = idx.fleet()["beacon"]
             self.assertTrue(beacon["igmp_ok"])
             self.assertEqual(beacon["igmp_error"], "")
+            self.assertEqual(beacon["igmp_iface"], "192.168.1.179")
+            self.assertFalse(beacon["igmp_rejoined"])
         finally:
             idx.stop()
             self._unpatch_start(orig)
@@ -491,13 +505,17 @@ class IgmpJoinTests(unittest.TestCase):
         fake = _FakeBeaconSock()
         box = [""]
         joins = []
+        leaves = []
 
         def join(sock, group=None, iface="0.0.0.0"):
             joins.append(iface)
             if iface == "0.0.0.0":
                 raise OSError("No such device")
 
-        orig = self._patch_start(fake, join, lan_ip=lambda: box[0])
+        def leave(sock, group=None, iface="0.0.0.0"):
+            leaves.append(iface)
+
+        orig = self._patch_start(fake, join, lan_ip=lambda: box[0], leave=leave)
         try:
             idx.start()
             self.assertEqual(joins, ["0.0.0.0"])
@@ -514,12 +532,15 @@ class IgmpJoinTests(unittest.TestCase):
             while len(joins) < 2 and time.time() < deadline:
                 time.sleep(0.02)
             self.assertEqual(joins, ["0.0.0.0", "192.168.1.179"])
+            self._assert_leave_both(leaves, "192.168.1.179")
             self.assertTrue(idx.igmp_ok)
             self.assertEqual(idx.igmp_error, "")
             beacon = idx.fleet()["beacon"]
             self.assertTrue(beacon["listening"])
             self.assertTrue(beacon["igmp_ok"])
             self.assertEqual(beacon["igmp_error"], "")
+            self.assertEqual(beacon["igmp_iface"], "192.168.1.179")
+            self.assertTrue(beacon["igmp_rejoined"])
         finally:
             idx.stop()
             self._unpatch_start(orig)
