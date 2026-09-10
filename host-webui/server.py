@@ -994,6 +994,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _boot_unison():
+    # One probe, no interval. Sticky unlink-intent still blocks auto-relink.
     time.sleep(6)
     try:
         PEERS.fleet(probe=True, extra=_hello_extra())
