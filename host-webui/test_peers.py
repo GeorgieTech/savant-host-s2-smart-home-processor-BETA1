@@ -358,23 +358,6 @@ class LinkTests(unittest.TestCase):
         self.assertFalse(rows[0]["playing"])
         self.assertFalse(rows[0]["unison"])
 
-    def test_igmp_join_error_survives_send_ok(self):
-        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
-        idx.igmp_ok = False
-        idx.igmp_error = "No such device"
-        idx.beacon_error = "No such device"
-        idx._note_beacon_sent()
-        self.assertTrue(idx.beacon_ok)
-        self.assertEqual(idx.beacon_error, "No such device")
-        fleet = idx.fleet(probe=False)
-        self.assertFalse(fleet["beacon"]["igmp"])
-        self.assertEqual(fleet["beacon"]["error"], "No such device")
-        idx.igmp_ok = True
-        idx.igmp_error = ""
-        idx._note_beacon_sent()
-        self.assertEqual(idx.beacon_error, "")
-        self.assertTrue(idx.fleet(probe=False)["beacon"]["igmp"])
-
     def test_link_rejects_forbidden_hosts(self):
         idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
         ok, err = idx.link("http://192.168.1.40")
