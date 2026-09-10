@@ -115,11 +115,11 @@ Deploy `player.py`, `unison.py`, `server.py` on **both** hosts, restart `crypt-w
 
 **Fix (phase 2, after CRYPT/1 is live):** `Range` resume on `.part`, compare `Content-Length` / size from the catalog row, keep copy-then-play (never stream into ffmpeg). Not required to ship CLOCK/beacon.
 
-### 6. Hello gossip grows
+### 6. Hello is not a roster
 
-`/api/hello` returns `shelves` plus up to 12 `seen` rows. Fine for two hosts. At four SHC-2000s it becomes a mesh of HTTP copies of the same roster.
+`GET /api/hello` (`PeerIndex.hello` in `host-webui/peers.py`) returns **this host** (id, uid, host, ip, url, model, version), **libver**, and the **linked UIDs** already in `peers.json` shelves. Cheap `tracks` / `playing` / `now` may ride along when they are already in memory. It does **not** return `shelves` rows or a gossip `seen[]` blob (the old cap was 12).
 
-**Fix (phase 2):** hello returns self + libver + linked UIDs only. Roster comes from multicast beacons. Do not expand gossip in this drop.
+At four SHC-2000s that blob was an HTTP mesh of the same roster — see [CLUSTER.md](CLUSTER.md). Roster discovery is CRYPT/1 **BEACON** on `239.18.20.1:41880` (JSON broadcast to `192.168.1.255` while dual-stack lives). `probe_url()` may still GET hello for **one** URL the operator asked to link. Do not expand gossip fields.
 
 ## CRYPT/1 datagram (already in `host-webui/crypt_wire.py`)
 
@@ -175,11 +175,11 @@ Multicast is the right default on this VLAN. Unicast CLOCK to the linked peer IP
 | File | Role |
 |---|---|
 | `host-webui/crypt_wire.py` | **New.** Encode/decode, FNV libver, IGMP join. |
-| `host-webui/peers.py` | Dual-stack beacon, libver short-circuit on `fetch_shelf`, `send_dgram`. |
+| `host-webui/peers.py` | Dual-stack beacon, slim hello (no `seen[]` gossip), libver short-circuit on `fetch_shelf`, `send_dgram`. |
 | `host-webui/unison.py` | CLOCK emit 50 ms; UDP `note_clock`; HTTP `/api/clock` if UDP goes quiet. |
 | `host-webui/server.py` | `PEERS.note_local_catalog()` so beacons carry a real libver. |
 | `host-webui/test_crypt_wire.py` | Wire tests. |
-| `host-webui/test_peers.py` | Includes libver skip test. |
+| `host-webui/test_peers.py` | Libver skip + hello payload contract (no `seen[]` / shelves gossip). |
 
 Do **not** add pip packages, systemd units, or a second UDP port.
 
@@ -227,11 +227,12 @@ Copy the V1.1.10 `peers.py` / `unison.py` / `server.py` back and **delete** `/da
 
 ## Phase 2 (do not block this deploy)
 
-- Drop JSON broadcast once both hosts have been on CRYPT/1 for a week.
+- Drop JSON broadcast once both hosts have been on CRYPT/1 for a week. Still gated on multicast PASS (#9). Do not mix that drop with this hello slim.
 - HTTP `Range` resume on `ensure()`.
-- Slim `/api/hello` (no gossip `seen` blob).
 - Prefetch **next** hot-cache file on the listening host (CLUSTER.md).
 - Optional unicast CLOCK to the linked IPv4 in addition to the group.
+
+Slim `/api/hello` (no gossip `seen[]` / shelf blob) is implemented in `host-webui/peers.py` as described in §6. Review-only until a human merges it.
 
 ## Tests before deploy
 

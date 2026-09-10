@@ -490,7 +490,19 @@ class PeerIndex(object):
         self._own_tracks = len(tracks or [])
         return self._own_libver
 
+    def _linked_uids(self):
+        out = []
+        seen = set()
+        for shelf in self.config().get("shelves") or []:
+            uid = _uid_from(shelf.get("uid") or shelf.get("id") or "")
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            out.append(uid)
+        return out
+
     def hello(self, extra=None):
+        """Identity + libver + linked UIDs. No shelves / seen[] gossip blob."""
         me = identity()
         hid = self.config().get("id") or me["id"]
         payload = {
@@ -503,35 +515,16 @@ class PeerIndex(object):
             "url": me["url"],
             "model": me["model"],
             "version": VERSION,
-            "shelves": self.snapshot().get("shelves") or [],
-            "seen": self.seen_public(),
+            "libver": int(self._own_libver or 0),
+            "linked": self._linked_uids(),
         }
         extra = extra or {}
         for key in ("tracks", "playing", "now"):
             if key in extra:
                 payload[key] = extra[key]
+        if "tracks" not in payload and self._own_tracks:
+            payload["tracks"] = int(self._own_tracks)
         return payload
-
-    def seen_public(self):
-        now = time.time()
-        out = []
-        with self.lock:
-            rows = list(self._seen.values())
-        for row in rows:
-            if now - float(row.get("last_seen") or 0) > BEACON_TTL * 4:
-                continue
-            if _blocked(row.get("ip") or ""):
-                continue
-            out.append({
-                "id": row.get("id") or "",
-                "uid": row.get("uid") or "",
-                "ip": row.get("ip") or "",
-                "url": row.get("url") or "",
-                "model": row.get("model") or "",
-            })
-            if len(out) >= 12:
-                break
-        return out
 
     def _load_seen(self):
         try:
@@ -917,15 +910,24 @@ class PeerIndex(object):
     def _mine(self, me):
         me = me or identity()
         cfg = self.config()
-        return set(filter(None, [
+        bits = [
             me.get("id"), me.get("uid"), me.get("ip"), me.get("host"), me.get("url"),
             cfg.get("id"),
-        ]))
+        ]
+        bits.extend(_uid_from(b) for b in list(bits))
+        return set(filter(None, bits))
 
     def _lists_us_as_shelf(self, data, me):
         if not isinstance(data, dict):
             return False
         mine = self._mine(me)
+        for item in data.get("linked") or []:
+            if isinstance(item, dict):
+                bit = item.get("uid") or item.get("id")
+            else:
+                bit = item
+            if bit and (bit in mine or _uid_from(bit) in mine):
+                return True
         for shelf in data.get("shelves") or []:
             if not isinstance(shelf, dict):
                 continue
@@ -985,16 +987,12 @@ class PeerIndex(object):
                 "last_seen": now,
                 "via": ["hello"],
             })
+            if host is not None:
+                try:
+                    host["libver"] = int(data.get("libver") or 0)
+                except (TypeError, ValueError):
+                    host["libver"] = 0
             self._remember(host)
-            gossip = []
-            for item in (data.get("seen") or []) + (data.get("shelves") or []):
-                if not isinstance(item, dict):
-                    continue
-                other = _as_host(item, via=["gossip"], last_seen=now)
-                if other and other.get("uid") and not _same(other, _as_host(me, self=True)):
-                    gossip.append(other)
-                    self._remember(other)
-            host["_gossip"] = gossip
             self._probe[url] = (now, host, "")
             return host, ""
         except Exception as exc:
@@ -1041,8 +1039,6 @@ class PeerIndex(object):
                 if found:
                     rows.append(found)
                     confirmed.add(urlparse(url).hostname or "")
-                    for item in found.get("_gossip") or []:
-                        rows.append(item)
                 elif err:
                     host = urlparse(url).hostname or ""
                     linked = any((r.get("url") == url or r.get("ip") == host) and r.get("linked") for r in rows)
@@ -1053,7 +1049,6 @@ class PeerIndex(object):
         folded = _fold_hosts(rows)
         out = []
         for row in folded:
-            row.pop("_gossip", None)
             if row.get("self"):
                 row["online"] = True
                 row["linked"] = False
