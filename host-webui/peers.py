@@ -467,6 +467,8 @@ class PeerIndex(object):
         self.beacon_error = ""
         self.igmp_ok = False
         self.igmp_error = ""
+        self._igmp_iface = ""
+        self._igmp_pending_rejoin = False
         self.error = ""
         self._own_libver = 0
         self._own_tracks = 0
@@ -1225,6 +1227,7 @@ class PeerIndex(object):
                 time.sleep(0.5)
                 continue
             if now - last_send >= 2:
+                self._maybe_deferred_igmp_rejoin()
                 seq = (seq + 1) & 0xFFFFFFFF
                 try:
                     sock.sendto(self._beacon_bin(seq), (crypt_wire.GROUP, BEACON_PORT))
@@ -1275,19 +1278,59 @@ class PeerIndex(object):
             self.beacon_error = str(exc)
             sock.close()
             return
-        try:
-            crypt_wire.join_group(sock, iface=_lan_ip() or "0.0.0.0")
-        except OSError as exc:
-            self.igmp_ok = False
-            self.igmp_error = str(exc)
-        else:
-            self.igmp_ok = True
-            self.igmp_error = ""
+        iface = _lan_ip() or "0.0.0.0"
+        self._join_igmp(sock, iface)
+        # crypt-web.service is After=/Wants=network-online.target, not Requires=.
+        # Yocto wait-online can still leave _lan_ip() empty, so join lands on
+        # INADDR_ANY with no IP_MULTICAST_IF, or fails, until DHCP assigns
+        # eth0 192.168.1.*. One deferred rejoin when that IP appears — not a
+        # periodic loop. eth0 flap still wants systemctl restart crypt-web.
+        self._igmp_pending_rejoin = (iface == "0.0.0.0" or not self.igmp_ok)
         self._sock = sock
         self._alive = True
         self._thread = threading.Thread(target=self._beacon_loop, name="crypt-beacon")
         self._thread.daemon = True
         self._thread.start()
+
+    def _record_igmp(self, ok, error=""):
+        """Sticky join status. Never called from beacon send success."""
+        self.igmp_ok = bool(ok)
+        self.igmp_error = "" if ok else str(error)
+
+    def _join_igmp(self, sock, iface):
+        try:
+            crypt_wire.join_group(sock, iface=iface)
+        except OSError as exc:
+            self._record_igmp(False, str(exc))
+            self._igmp_iface = iface
+            return False
+        self._record_igmp(True)
+        self._igmp_iface = iface
+        return True
+
+    def _maybe_deferred_igmp_rejoin(self):
+        """One rejoin when _lan_ip() flips to 192.168.1.* after start().
+
+        Samples only on the existing 2 s beacon cadence while pending, so
+        DualLite is not woken by a new thread or a high-rate ioctl loop.
+        After one attempt, pending is cleared even if the rejoin fails.
+        """
+        if not self._igmp_pending_rejoin:
+            return
+        sock = self._sock
+        if sock is None:
+            return
+        ip = _lan_ip()
+        if not ip:
+            return
+        self._igmp_pending_rejoin = False
+        old = self._igmp_iface
+        if old and old != ip:
+            try:
+                crypt_wire.leave_group(sock, iface=old)
+            except OSError:
+                pass
+        self._join_igmp(sock, ip)
 
     def send_dgram(self, blob, dest=None):
         sock = self._sock
