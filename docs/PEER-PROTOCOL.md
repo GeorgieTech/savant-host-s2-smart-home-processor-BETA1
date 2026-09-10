@@ -105,9 +105,9 @@ Deploy `player.py`, `unison.py`, `server.py` on **both** hosts, restart `crypt-w
 
 ### 4. Library merge refetches the whole catalog
 
-`fetch_shelf()` pulls `GET /api/library?local=1` (up to 2 MiB JSON) with an **8 s** TTL, even when nothing changed. Library page, play, and owner lookup all hit that.
+`fetch_shelf()` pulls `GET /api/library?local=1` (up to 2 MiB JSON). Library page, play, and owner lookup all hit that.
 
-**Fix:** each beacon carries a 64-bit **libver** (FNV-1a of `name:size:mtime` rows). If the advertised libver matches the last successful fetch, skip HTTP. First fetch still happens; file changes flip libver.
+**Fix:** each beacon carries a 64-bit **libver** (FNV-1a of `name:size:mtime` rows). libver is the ETag: skip HTTP only when it matches the last successful fetch. A new advertised libver bypasses the 8 s success TTL and refetches immediately. Error retries stay on a 2 s backoff. First fetch still happens; file changes flip libver.
 
 ### 5. Copy path has no resume and no verify
 
@@ -130,7 +130,7 @@ offset  size  field
 0       4     magic     "CRPT"
 4       1     version   1
 5       1     type      1=BEACON  2=CLOCK  3=LIBVER  4=ACK
-6       1     flags     bit0 linked  bit1 unison  bit2 playing
+6       1     flags     bit0 linked (this host has any shelves)  bit1 unison  bit2 playing
 7       1     uid_len   1..16
 8       4     seq       uint32 big-endian
 12      1     checksum  sum of all bytes with this field zeroed, mod 256

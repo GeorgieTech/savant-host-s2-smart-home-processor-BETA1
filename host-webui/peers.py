@@ -319,6 +319,7 @@ def _blank_host():
         "lists_us": False,
         "tracks": 0,
         "playing": False,
+        "unison": False,
         "now": "",
         "rtt_ms": None,
         "last_seen": 0,
@@ -360,6 +361,7 @@ def _as_host(data, **extra):
     except (TypeError, ValueError):
         row["tracks"] = 0
     row["playing"] = bool(src.get("playing"))
+    row["unison"] = bool(src.get("unison"))
     row["now"] = str(src.get("now") or "")
     rtt = src.get("rtt_ms")
     try:
@@ -402,8 +404,15 @@ def _merge_host(dst, src):
         if src.get(key) and (not out.get(key) or key in ("model", "version", "now", "error")):
             if src.get(key):
                 out[key] = src[key]
-    for flag in ("self", "online", "linked", "sees_us", "lists_us", "playing"):
+    for flag in ("self", "online", "linked", "sees_us", "lists_us"):
         out[flag] = bool(out.get(flag) or src.get(flag))
+    # Live play flags: newest last_seen wins. Do not sticky-OR — a later
+    # beacon with playing=0 must clear the roster bit.
+    src_seen = float(src.get("last_seen") or 0)
+    out_seen = float(out.get("last_seen") or 0)
+    if src_seen >= out_seen:
+        out["playing"] = bool(src.get("playing"))
+        out["unison"] = bool(src.get("unison"))
     if int(src.get("tracks") or 0) > int(out.get("tracks") or 0):
         out["tracks"] = int(src.get("tracks") or 0)
     try:
@@ -465,6 +474,8 @@ class PeerIndex(object):
         self._sock = None
         self.beacon_ok = False
         self.beacon_error = ""
+        self.igmp_ok = False
+        self.igmp_error = ""
         self.error = ""
         self._own_libver = 0
         self._own_tracks = 0
@@ -688,6 +699,8 @@ class PeerIndex(object):
             "last_seen": now if now is not None else time.time(),
             "via": ["beacon"],
             "tracks": payload.get("tracks") or 0,
+            "playing": bool(payload.get("playing")),
+            "unison": bool(payload.get("unison")),
         })
         if host is not None:
             try:
@@ -721,8 +734,11 @@ class PeerIndex(object):
                 cached_ver = None
         if hit and announced and cached_ver == announced and not hit[2]:
             return hit[1], ""
-        ttl = 8
-        if hit and now - hit[0] < (2 if hit[2] else ttl):
+        # libver is the ETag. A new advertised fingerprint bypasses the
+        # success TTL so a catalog change is visible on the next poll.
+        if announced and cached_ver is not None and cached_ver != announced:
+            pass
+        elif hit and now - hit[0] < (2 if hit[2] else 8):
             return hit[1], hit[2]
         try:
             try:
@@ -1101,6 +1117,7 @@ class PeerIndex(object):
                 "port": BEACON_PORT,
                 "listening": bool(self.beacon_ok),
                 "error": self.beacon_error,
+                "igmp": bool(self.igmp_ok),
             },
             "error": self.error,
         }
@@ -1182,8 +1199,24 @@ class PeerIndex(object):
             if host.get("lists_us") and host.get("url"):
                 self.link(host.get("url"), notify=False)
 
+    def _local_play_flags(self):
+        """Snapshot playing + Unison on/following for CRYPT/1 BEACON flags."""
+        playing = False
+        unison = False
+        try:
+            from unison import UNISON
+            usnap = UNISON.snapshot()
+            unison = bool(usnap.get("on") or usnap.get("following"))
+            player = getattr(UNISON, "player", None)
+            if player is not None and hasattr(player, "snapshot"):
+                playing = bool((player.snapshot() or {}).get("playing"))
+        except Exception:
+            pass
+        return playing, unison
+
     def _beacon_payload(self):
         me = identity()
+        playing, unison = self._local_play_flags()
         return json.dumps({
             "crypt": 1,
             "v": VERSION,
@@ -1194,12 +1227,16 @@ class PeerIndex(object):
             "model": me["model"],
             "tracks": int(self._own_tracks or 0),
             "libver": int(self._own_libver or 0),
+            "playing": playing,
+            "unison": unison,
         }, separators=(",", ":")).encode("utf-8")
 
     def _beacon_bin(self, seq):
         me = identity()
         cfg = self.config()
+        # FLAG_LINKED means this host has any shelves, not "I list you".
         linked = bool(cfg.get("shelves"))
+        playing, unison = self._local_play_flags()
         return crypt_wire.encode_beacon(
             me.get("uid") or "",
             seq,
@@ -1209,7 +1246,17 @@ class PeerIndex(object):
             tracks=int(self._own_tracks or 0),
             libhash=int(self._own_libver or 0),
             linked=linked,
+            playing=playing,
+            unison=unison,
         )
+
+    def _note_beacon_sent(self):
+        """Send-to-group does not prove IGMP membership. Keep join errors."""
+        self.beacon_ok = True
+        if self.igmp_ok:
+            self.beacon_error = ""
+        elif self.igmp_error:
+            self.beacon_error = self.igmp_error
 
     def _beacon_loop(self):
         last_send = 0
@@ -1225,8 +1272,7 @@ class PeerIndex(object):
                 try:
                     sock.sendto(self._beacon_bin(seq), (crypt_wire.GROUP, BEACON_PORT))
                     sock.sendto(self._beacon_payload(), (BROADCAST, BEACON_PORT))
-                    self.beacon_ok = True
-                    self.beacon_error = ""
+                    self._note_beacon_sent()
                 except Exception as exc:
                     self.beacon_error = str(exc)
                 last_send = now
@@ -1272,7 +1318,11 @@ class PeerIndex(object):
             return
         try:
             crypt_wire.join_group(sock, iface=_lan_ip() or "0.0.0.0")
+            self.igmp_ok = True
+            self.igmp_error = ""
         except OSError as exc:
+            self.igmp_ok = False
+            self.igmp_error = str(exc)
             self.beacon_error = str(exc)
         self._sock = sock
         self._alive = True

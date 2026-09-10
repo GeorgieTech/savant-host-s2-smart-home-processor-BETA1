@@ -11,7 +11,8 @@ class RoundtripTests(unittest.TestCase):
         pkt = w.encode_beacon(
             "001AAE10E4090000", 42,
             ip="192.168.1.179", model="SHR-S2-00", version="1.1.10",
-            tracks=12, libhash=0xDEADBEEFCAFEBABE, linked=True, playing=True,
+            tracks=12, libhash=0xDEADBEEFCAFEBABE, linked=True,
+            playing=True, unison=True,
         )
         self.assertLessEqual(len(pkt), w.MAX_DGRAM)
         out = w.decode(pkt)
@@ -22,6 +23,7 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(out["libver"], 0xDEADBEEFCAFEBABE)
         self.assertTrue(out["linked"])
         self.assertTrue(out["playing"])
+        self.assertTrue(out["unison"])
         self.assertEqual(out["seq"], 42)
         self.assertEqual(out["v"], "1.1.10")
 

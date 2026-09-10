@@ -89,7 +89,8 @@ function commLine(h) {
   else bits.push("Remembered");
   if (h.online && h.sees_us) bits.push("they see us");
   if (h.online && h.rtt_ms != null) bits.push(h.rtt_ms + " ms");
-  if (h.playing && h.now) bits.push("playing");
+  if (h.playing) bits.push("playing");
+  if (h.unison) bits.push("unison");
   if (h.error && !h.online) bits.push(h.error);
   return bits.join(" · ");
 }
