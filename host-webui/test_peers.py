@@ -368,6 +368,136 @@ class LinkTests(unittest.TestCase):
         self.assertTrue(err)
 
 
+class FleetProbeTests(unittest.TestCase):
+    def _hello_lists_us(self, calls=None):
+        me = peers.identity()
+
+        def fake(url):
+            if calls is not None:
+                calls.append(url)
+            self.assertTrue(url.endswith("/api/hello"))
+            return {
+                "ok": True,
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+                "ip": "192.168.1.179",
+                "model": "SHR-S2-00",
+                "version": "1.1.12",
+                "shelves": [{
+                    "id": me.get("id") or "",
+                    "uid": me.get("uid") or "",
+                    "url": me.get("url") or "",
+                }],
+                "seen": [],
+                "tracks": 71,
+            }
+
+        return fake
+
+    def test_fleet_without_probe_skips_hello(self):
+        folder = tempfile.mkdtemp(prefix="crypt-fleet-")
+        try:
+            path = os.path.join(folder, "peers.json")
+            seen = os.path.join(folder, "seen.json")
+            with open(path, "w") as fh:
+                json.dump({"id": "crypt-viewer", "shelves": []}, fh)
+            calls = []
+            idx = peers.PeerIndex(path=path, http=self._hello_lists_us(calls), seen_path=seen,
+                                  hot_path=os.path.join(folder, "hot.json"))
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+            }, "192.168.1.179")
+            payload = idx.fleet(probe=False)
+            self.assertEqual(calls, [])
+            self.assertFalse(any(h.get("linked") for h in payload["hosts"] if not h.get("self")))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_probe_autolinks_when_peer_lists_us(self):
+        folder = tempfile.mkdtemp(prefix="crypt-autolink-")
+        try:
+            path = os.path.join(folder, "peers.json")
+            seen = os.path.join(folder, "seen.json")
+            with open(path, "w") as fh:
+                json.dump({"id": "crypt-viewer", "shelves": []}, fh)
+            idx = peers.PeerIndex(path=path, http=self._hello_lists_us(), seen_path=seen,
+                                  hot_path=os.path.join(folder, "hot.json"))
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+            }, "192.168.1.179")
+            payload = idx.fleet(probe=True)
+            self.assertEqual(len(peers.load_config(path)["shelves"]), 1)
+            linked = [h for h in payload["hosts"] if not h.get("self") and h.get("linked")]
+            self.assertEqual(len(linked), 1)
+            self.assertEqual(linked[0]["uid"], "001AAE10E4090000")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_unlink_intent_blocks_probe_and_boot_autolink(self):
+        folder = tempfile.mkdtemp(prefix="crypt-sticky-")
+        try:
+            path = os.path.join(folder, "peers.json")
+            seen = os.path.join(folder, "seen.json")
+            hot = os.path.join(folder, "hot.json")
+            with open(path, "w") as fh:
+                json.dump({"id": "crypt-viewer", "shelves": []}, fh)
+            fake = self._hello_lists_us()
+            idx = peers.PeerIndex(path=path, http=fake, seen_path=seen, hot_path=hot)
+            ok, err = idx.link("http://192.168.1.179", notify=False)
+            self.assertTrue(ok, err)
+            ok, err = idx.unlink("001AAE10E4090000", notify=False)
+            self.assertTrue(ok, err)
+            cfg = peers.load_config(path)
+            self.assertEqual(cfg["shelves"], [])
+            self.assertTrue(cfg.get("unlinked"))
+            idx.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+            }, "192.168.1.179")
+            idx.fleet(probe=True)
+            self.assertEqual(peers.load_config(path)["shelves"], [])
+
+            boot = peers.PeerIndex(path=path, http=fake, seen_path=seen, hot_path=hot)
+            boot.note_beacon({
+                "crypt": 1,
+                "id": "crypt-001aae10e4090000",
+                "uid": "001AAE10E4090000",
+                "host": "crypt-001aae10e4090000",
+            }, "192.168.1.179")
+            boot.fleet(probe=True)
+            self.assertEqual(peers.load_config(path)["shelves"], [])
+
+            ok, err = boot.link("http://192.168.1.179", notify=False)
+            self.assertTrue(ok, err)
+            cfg = peers.load_config(path)
+            self.assertEqual(len(cfg["shelves"]), 1)
+            self.assertEqual(cfg.get("unlinked") or [], [])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class SettingsPollTests(unittest.TestCase):
+    def test_idle_settings_poll_is_probe_zero(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.html")
+        with open(path, "r") as fh:
+            src = fh.read()
+        self.assertNotIn("probe=1", src)
+        self.assertNotIn("loadFleet(true)", src)
+        self.assertIn("setInterval(loadFleet, 4000)", src)
+        self.assertIn('action: "scan"', src)
+        self.assertIn('id="btn-scan"', src)
+
+
 def load_cfg():
     return {
         "id": "crypt-viewer",

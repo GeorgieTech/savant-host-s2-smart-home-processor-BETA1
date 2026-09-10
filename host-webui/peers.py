@@ -218,6 +218,7 @@ def load_config(path=None):
     return {
         "id": str(data.get("id") or _self_id()),
         "shelves": shelves,
+        "unlinked": _fold_unlinked(data.get("unlinked") or []),
     }
 
 
@@ -246,6 +247,15 @@ def save_config(cfg, path=None):
             "url": url,
             "uid": str(item.get("uid") or _uid_from(sid)),
         })
+    unlinked = []
+    for row in _fold_unlinked((cfg or {}).get("unlinked") or []):
+        unlinked.append({
+            "id": str(row.get("id") or ""),
+            "uid": str(row.get("uid") or ""),
+            "url": str(row.get("url") or ""),
+        })
+    if unlinked:
+        payload["unlinked"] = unlinked
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(payload, fh, indent=2, sort_keys=True)
@@ -392,6 +402,65 @@ def _same(a, b):
     if a.get("url") and b.get("url") and a["url"] == b["url"]:
         return True
     return False
+
+
+def _host_tokens(item):
+    if not item:
+        return set()
+    if not isinstance(item, dict):
+        item = {"id": str(item)}
+    url = str(item.get("url") or "")
+    host = urlparse(url).hostname if url else ""
+    bits = [
+        item.get("id"),
+        item.get("uid"),
+        item.get("url"),
+        item.get("ip"),
+        item.get("host"),
+        host,
+    ]
+    out = set()
+    for bit in bits:
+        s = str(bit or "").strip()
+        if s:
+            out.add(s)
+    return out
+
+
+def _unlinked_row(item):
+    if isinstance(item, str):
+        item = {"url": item}
+    if not isinstance(item, dict):
+        return None
+    url = _clean_url(item.get("url") or "")
+    sid = str(item.get("id") or "")
+    uid = str(item.get("uid") or _uid_from(sid) or "")
+    ip = str(item.get("ip") or "")
+    if not ip and url:
+        ip = urlparse(url).hostname or ""
+    if not (sid or uid or url or ip):
+        return None
+    return {"id": sid, "uid": uid, "url": url, "ip": ip}
+
+
+def _fold_unlinked(items):
+    out = []
+    for item in items or []:
+        row = _unlinked_row(item)
+        if not row:
+            continue
+        hit = None
+        for existing in out:
+            if _host_tokens(existing) & _host_tokens(row):
+                hit = existing
+                break
+        if hit is None:
+            out.append(row)
+            continue
+        for key in ("id", "uid", "url", "ip"):
+            if row.get(key) and not hit.get(key):
+                hit[key] = row[key]
+    return out
 
 
 def _merge_host(dst, src):
@@ -1147,6 +1216,11 @@ class PeerIndex(object):
             shelves.append({"id": sid, "url": url, "uid": uid})
         cfg["id"] = cfg.get("id") or me.get("id")
         cfg["shelves"] = shelves
+        linked_bits = _host_tokens({"id": sid, "uid": uid, "url": url})
+        cfg["unlinked"] = [
+            row for row in (cfg.get("unlinked") or [])
+            if not (linked_bits & _host_tokens(row))
+        ]
         save_config(cfg, self.path)
         self.reload()
         if found:
@@ -1177,6 +1251,9 @@ class PeerIndex(object):
         if not dropped:
             return False, "not linked"
         cfg["shelves"] = kept
+        intent = list(cfg.get("unlinked") or [])
+        intent.append(dropped)
+        cfg["unlinked"] = _fold_unlinked(intent)
         save_config(cfg, self.path)
         self.reload()
         if notify and dropped.get("url"):
@@ -1191,11 +1268,22 @@ class PeerIndex(object):
                 pass
         return True, ""
 
+    def _unlink_intent(self, host):
+        tokens = _host_tokens(host)
+        if not tokens:
+            return False
+        for row in self.config().get("unlinked") or []:
+            if tokens & _host_tokens(row):
+                return True
+        return False
+
     def maybe_unison_link(self, hosts=None):
         """If a live host already lists us as a shelf, link back so libraries merge."""
         rows = hosts if hosts is not None else self.roster(probe=False)
         for host in rows:
             if host.get("self") or host.get("linked") or not host.get("online"):
+                continue
+            if self._unlink_intent(host):
                 continue
             if host.get("lists_us") and host.get("url"):
                 self.link(host.get("url"), notify=False)
