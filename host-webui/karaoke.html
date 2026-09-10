@@ -46,9 +46,9 @@
       </div>
       <p class="hint" id="hint">Drop a matching .lrc next to the track, same as MusicBee or foobar2000 OpenLyrics. Timing follows Host Time Clock (what TOSLINK is emitting). Deleting the track also deletes its lyrics.</p>
       <div class="row center kara-actions">
-        <button class="icon" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
+        <button class="icon" id="prevbtn" type="button" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
         <button class="playbig primary" id="playbtn" onclick="toggle()">Play</button>
-        <button class="icon" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
+        <button class="icon" id="nextbtn" type="button" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
       </div>
       <div class="row center">
         <button class="ghost" id="fetchbtn" type="button">Fetch lyrics</button>
@@ -192,6 +192,7 @@ async function toggle() {
   const p = (last.player || {});
   if (p.playing) await api("/api/pause");
   else if (p.paused) await api("/api/resume");
+  else if ((last.unison || {}).following) return;
   else if (p.name) await api("/api/play", { name: p.name });
   else if ((last.count || 0) > 0) await api("/api/next");
   tick();
@@ -224,6 +225,15 @@ async function tick() {
     };
     $("hostline").textContent = playing ? "TOSLINK · karaoke" : "SHR-S2 · karaoke";
     $("playbtn").textContent = playing ? "Pause" : "Play";
+    const lock = !!(st.unison || {}).following;
+    const title = lock ? "Conductor owns Unison transport" : "";
+    ["prevbtn", "nextbtn"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.disabled = lock;
+      if (title) el.title = title;
+      else el.removeAttribute("title");
+    });
     const badge = $("state");
     badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
     badge.textContent = playing ? "Live" : paused ? "Paused" : "Idle";

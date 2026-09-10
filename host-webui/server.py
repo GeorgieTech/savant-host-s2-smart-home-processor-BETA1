@@ -23,6 +23,8 @@ from report import REPORTS
 from peers import PEERS, VERSION, identity
 from unison import UNISON
 
+FOLLOWER_TRANSPORT = "conductor owns Unison transport"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("WEBUI_PORT", "80"))
 EQ_FILE = os.environ.get("EQ_FILE", "/data/crypt/eq.json")
@@ -460,11 +462,25 @@ class CryptApp(object):
             self.player.error = "could not copy from shelf"
         return ok
 
-    def play_name(self, name, start=0.0, order=None, follow=False, conductor="", conductor_uid=""):
+    def _apply_unison_role(self, follow, conductor="", conductor_uid=""):
+        """Shared Play/Next policy. V1: local transport is refused while following.
+
+        CLOCK is emitted only when `_follow_url` is empty. A follower that
+        starts a track locally would fan `/api/unison/follow` and orphan CLOCK.
+        PEER-PROTOCOL has no takeover endpoint, so the follower stays a follower.
+        """
         if follow:
             UNISON.follow(conductor, conductor_uid)
-        else:
-            UNISON.unfollow()
+            return True
+        if UNISON.snapshot().get("following"):
+            self.player.error = FOLLOWER_TRANSPORT
+            return False
+        UNISON.unfollow()
+        return True
+
+    def play_name(self, name, start=0.0, order=None, follow=False, conductor="", conductor_uid=""):
+        if not self._apply_unison_role(follow, conductor, conductor_uid):
+            return False
         self.refresh()
         if not self._ensure_local(name):
             return False
@@ -517,6 +533,8 @@ class CryptApp(object):
         return self.play_name(pl["tracks"][0], order=pl["tracks"])
 
     def _start_name(self, name, start=0.0, nxt="", follow=False):
+        if not self._apply_unison_role(follow):
+            return False
         if not self._ensure_local(name):
             return False
         ok = self.player.play(name, start=start)
@@ -533,6 +551,8 @@ class CryptApp(object):
         return ok
 
     def play_index(self, idx):
+        if not self._apply_unison_role(False):
+            return False
         self.refresh()
         with self.lock:
             if not self.order:
@@ -544,6 +564,8 @@ class CryptApp(object):
         return self._start_name(name, 0.0, nxt)
 
     def next_track(self):
+        if not self._apply_unison_role(False):
+            return False
         self.refresh()
         with self.lock:
             if not self.order:
@@ -554,6 +576,8 @@ class CryptApp(object):
         return self._start_name(name, 0.0, nxt)
 
     def prev_track(self):
+        if not self._apply_unison_role(False):
+            return False
         self.refresh()
         with self.lock:
             if not self.order:
@@ -582,6 +606,9 @@ class CryptApp(object):
 
     def stop(self, follow=False):
         if not follow:
+            if UNISON.snapshot().get("following"):
+                self.player.error = FOLLOWER_TRANSPORT
+                return False
             UNISON.unfollow()
             UNISON.broadcast("/api/stop", {})
         else:
@@ -863,7 +890,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/stop":
-                self._send(200, {"ok": APP.stop(follow=bool(body.get("follow")))})
+                ok = APP.stop(follow=bool(body.get("follow")))
+                self._send(200 if ok else 400, {"ok": ok, "error": APP.player.error})
                 return
             if path == "/api/next":
                 ok = APP.next_track()

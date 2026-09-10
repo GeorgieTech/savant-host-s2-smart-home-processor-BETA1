@@ -150,6 +150,8 @@ Checksum is **not** crypto. It only drops corruption. Lab LAN is trusted; blocke
 `heard_us i64 | mono_us i64 | path_us i64 | state u8`  
 Times are microseconds (`-1` = unknown). `heard` is Host Time Clock heard position, same meaning as `GET /api/clock` → `player.clock.heard`. Sent every 50 ms by the Unison conductor (the host that is not following).
 
+V1 follower transport: Next / Prev / Stop / Play-from-queue on a host with `_follow_url` set are rejected (UI-disabled). PEER-PROTOCOL has no takeover endpoint; CLOCK is emitted only when `_follow_url` is empty. Follower local Next used to fan `/api/unison/follow` without `unfollow()`, which left both hosts following and neither emitting CLOCK. Pause / Resume / Seek stay HTTP rare commands and still fan without changing the conductor. Do not claim Unison until issue #9 earshot PASS and this lock is closed.
+
 ### LIBVER payload
 
 Optional later: `libver u64 | tracks u16` when the catalog changes, so peers do not wait for the next beacon. BEACON already carries libver; this type is for a burst after a rip/upload.
