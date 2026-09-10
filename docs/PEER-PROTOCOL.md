@@ -16,7 +16,7 @@ This cloud agent cannot complete a two-host LAN conversation. UDP probes to `:41
 2. Static runtime of `peers.py` + `unison.py` as shipped in V1.1.10.
 3. New `host-webui/test_crypt_wire.py` round-trips for CRYPT/1.
 
-Lab confirmation after deploy (on either host, as `RPM`):
+Lab confirmation after deploy — first-class check on **both** hosts (as `RPM`). `ss` plus a join-group recv of `CRPT` is required; send-to-group does not prove membership (`IP_MULTICAST_LOOP` is 0). Settings must show `beacon.igmp_error` if `IP_ADD_MEMBERSHIP` failed.
 
 ```sh
 ss -ulnp | grep 41880
@@ -175,8 +175,9 @@ Multicast is the right default on this VLAN. Unicast CLOCK to the linked peer IP
 | File | Role |
 |---|---|
 | `host-webui/crypt_wire.py` | **New.** Encode/decode, FNV libver, IGMP join. |
-| `host-webui/peers.py` | Dual-stack beacon, libver short-circuit on `fetch_shelf`, `send_dgram`. |
-| `host-webui/unison.py` | CLOCK emit 50 ms; UDP `note_clock`; HTTP `/api/clock` if UDP goes quiet. |
+| `host-webui/peers.py` | Dual-stack beacon, libver short-circuit on `fetch_shelf`, `send_dgram`. Join failure is `beacon.igmp_*` and is not cleared by send. |
+| `host-webui/unison.py` | CLOCK emit 50 ms; UDP `note_clock`; HTTP `/api/clock` if UDP goes quiet. Snapshot `via` is `udp` or `http-clock`. |
+| `host-webui/settings.html` | Paints `beacon.igmp_error` so Settings can show join failed while send still looks Live. |
 | `host-webui/server.py` | `PEERS.note_local_catalog()` so beacons carry a real libver. |
 | `host-webui/test_crypt_wire.py` | Wire tests. |
 | `host-webui/test_peers.py` | Includes libver skip test. |
@@ -191,14 +192,15 @@ From repo root (add `crypt_wire.py` to the existing V1.1.10 copy list in [DEPLOY
 
 ```sh
 scp -O host-webui/crypt_wire.py host-webui/peers.py host-webui/unison.py host-webui/server.py \
+  host-webui/settings.html \
   RPM@192.168.1.179:/tmp/ RPM@192.168.1.142:/tmp/
 ```
 
 On **each** host, as root via `sudo env bash`:
 
 ```sh
-cp /tmp/crypt_wire.py /tmp/peers.py /tmp/unison.py /tmp/server.py /data/www/
-chown RPM:RPM /data/www/crypt_wire.py /data/www/peers.py /data/www/unison.py /data/www/server.py
+cp /tmp/crypt_wire.py /tmp/peers.py /tmp/unison.py /tmp/server.py /tmp/settings.html /data/www/
+chown RPM:RPM /data/www/crypt_wire.py /data/www/peers.py /data/www/unison.py /data/www/server.py /data/www/settings.html
 systemctl restart crypt-web.service
 ```
 
@@ -207,10 +209,11 @@ Restart **.179 and .142 within a minute of each other**. Pulse / hostname units 
 ### Checks
 
 1. `systemctl is-active crypt-web` is `active` on both.
-2. Settings → On the LAN still shows the other UID (JSON beacon covers mixed seconds).
-3. After both are up, `python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1/api/hello').read()[:200])"` still returns `crypt:1`.
-4. Link remains two-way. Play a shelf track: still copy then TOSLINK.
-5. Optional Unison, same track, both optical jacks in earshot: follower PLL should **lock**. `drift_ms` should hold near 0, not hunt ±400 ms. A hallway between zones should not sound like two bands.
+2. On **both** hosts: `ss -ulnp | grep 41880` shows crypt-web bound `0.0.0.0:41880`, and the join-group recv snippet above prints a `CRPT` datagram within 6 s. Optional: `grep 239.18.20.1 /proc/net/igmp`. Send success alone is not membership — Settings must show an IGMP join error if join failed, even when blades are Live via JSON broadcast.
+3. Settings → On the LAN still shows the other UID (JSON beacon covers mixed seconds).
+4. After both are up, `python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1/api/hello').read()[:200])"` still returns `crypt:1`.
+5. Link remains two-way. Play a shelf track: still copy then TOSLINK.
+6. Optional Unison, same track, both optical jacks in earshot: follower PLL should **lock**. `drift_ms` should hold near 0, not hunt ±400 ms. A hallway between zones should not sound like two bands. Unison snapshot `via` is `udp` while CLOCK arrives; `http-clock` if no UDP CLOCK for >250 ms.
 
 ### Rollback
 
