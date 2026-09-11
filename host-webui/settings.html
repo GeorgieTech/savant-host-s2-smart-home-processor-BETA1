@@ -31,7 +31,7 @@
         <h2>On the LAN</h2>
         <span class="badge" id="lan-badge">Listening</span>
       </div>
-      <p class="hint">Each chassis keeps its own Savant UID. <strong>Live</strong> means we hear it on 192.168.1.0/24. <strong>Linked</strong> merges both libraries; the file stays on the owner. A third host appears as its own blade when it comes online.</p>
+      <p class="hint">Each chassis keeps its own Savant UID. <strong>Live</strong> means we hear it on 192.168.1.0/24. <strong>Link shelf</strong> merges both libraries; the file stays on the owner. That is not Unison. <strong>Unison optical</strong> (below) fans Play / Pause / Seek / Next to linked TOSLINK jacks. A third host appears as its own blade when it comes online.</p>
       <div class="mesh-wrap" aria-hidden="true">
         <svg id="mesh" viewBox="0 0 320 148" preserveAspectRatio="xMidYMid meet"></svg>
       </div>
@@ -45,10 +45,10 @@
     </section>
     <section class="card">
       <div class="section-head">
-        <h2>Unison TOSLINK</h2>
+        <h2>Unison optical</h2>
         <span class="badge" id="uni-badge">Off</span>
       </div>
-      <p class="hint">When this is on, Play / Pause / Seek / Next on this host also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Off means each TOSLINK is independent, still from the merged catalog.</p>
+      <p class="hint">Unison optical is the TOSLINK sync switch — not the same as Link shelf. When this is on, Play / Pause / Seek / Next on this host also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Off is Solo: this TOSLINK is independent, still from the merged catalog.</p>
       <div class="row">
         <button type="button" class="unison-btn" id="uni-toggle">Unison off</button>
       </div>
@@ -174,7 +174,7 @@ function blade(h) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "primary";
-      btn.textContent = "Link for unison";
+      btn.textContent = "Link shelf";
       btn.onclick = () => linkHost(h);
       actions.appendChild(btn);
     }
