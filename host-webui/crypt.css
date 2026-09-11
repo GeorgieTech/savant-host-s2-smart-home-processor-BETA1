@@ -815,6 +815,8 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
 }
 .queue li:last-child { border-bottom: 0; }
 .queue li:hover { background: rgba(155,28,28,0.08); }
+.queue li.locked { opacity: 0.4; cursor: not-allowed; }
+.queue li.locked:hover { background: transparent; }
 .queue .idx {
   color: var(--ember);
   font-variant-numeric: tabular-nums;
