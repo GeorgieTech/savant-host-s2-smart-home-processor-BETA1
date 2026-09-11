@@ -65,7 +65,7 @@
         <button class="playbig primary" id="playbtn" type="button" aria-label="Play">Play</button>
         <button class="icon" id="nextbtn" type="button" aria-label="Next">⟩⟩</button>
       </div>
-      <p class="follow-hint" id="followhint" hidden>Following another host — tap Solo to take over here.</p>
+      <p class="follow-hint" id="followhint" hidden>Follow owns transport — tap Solo to leave.</p>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
         <div class="wave-progress hidden" id="waveprog">
@@ -289,7 +289,7 @@ function followingUnison() {
   return !!(last.unison || {}).following;
 }
 function followerLockTitle() {
-  return followingUnison() ? "Following another host — tap Solo to take over here." : "";
+  return followingUnison() ? "Follow owns transport — tap Solo to leave." : "";
 }
 function lockFollowerTransport() {
   const lock = followingUnison();
@@ -299,6 +299,7 @@ function lockFollowerTransport() {
     const el = $(id);
     if (!el) return;
     el.disabled = lock;
+    el.setAttribute("aria-disabled", lock ? "true" : "false");
     if (title) el.title = title;
     else el.removeAttribute("title");
   });
@@ -306,6 +307,7 @@ function lockFollowerTransport() {
   if (play) {
     const idleLock = lock && !p.playing && !p.paused;
     play.disabled = idleLock;
+    play.setAttribute("aria-disabled", idleLock ? "true" : "false");
     if (idleLock) play.title = title;
     else play.removeAttribute("title");
   }

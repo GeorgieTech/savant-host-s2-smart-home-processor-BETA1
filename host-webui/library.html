@@ -220,8 +220,20 @@ function copyStamp(t) {
 function isLocalRow(t) {
   if (!t) return false;
   if (isRemote(t)) return false;
-  if (t.here === false || t.home === false || t.local === false) return false;
+  if (t.local === false) return false;
+  if (t.here === false || t.home === false) return false;
   return true;
+}
+function ownedSelected() {
+  return selectedNames().filter((n) => isLocalRow((last.tracks || []).filter((t) => t.name === n)[0]));
+}
+function syncManageActions() {
+  const n = ownedSelected().length;
+  const busy = !!jobBusy;
+  const del = $("del-sel");
+  const apply = $("bulk-apply");
+  if (del) del.disabled = busy || !n;
+  if (apply) apply.disabled = busy || !n;
 }
 function emptyState(title, detail) {
   const li = document.createElement("li");
@@ -232,7 +244,7 @@ function emptyState(title, detail) {
 }
 async function playRemote(row, requestFn) {
   if (followingUnison()) {
-    $("err").textContent = "Following another host — tap Solo on Playing to take over here.";
+    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
     return;
   }
   if (jobBusy) return;
@@ -273,7 +285,7 @@ async function playRemote(row, requestFn) {
 }
 async function playList(list, start) {
   if (followingUnison()) {
-    $("err").textContent = "Following another host — tap Solo on Playing to take over here.";
+    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
     return;
   }
   const names = (list || []).map((t) => t.name).filter(Boolean);
@@ -426,6 +438,7 @@ function rowManage(t) {
   const li = document.createElement("li");
   const local = isLocalRow(t);
   li.className = "manage-row" + (selected[t.name] ? " picked" : "") + (local ? "" : " away");
+  if (!local) li.setAttribute("aria-readonly", "true");
   const box = document.createElement("input");
   box.type = "checkbox";
   box.checked = !!(local && selected[t.name]);
@@ -437,7 +450,8 @@ function rowManage(t) {
     if (box.checked) selected[t.name] = true;
     else delete selected[t.name];
     li.classList.toggle("picked", box.checked);
-    $("manage-hint").textContent = selectedNames().length + " selected";
+    $("manage-hint").textContent = ownedSelected().length + " selected";
+    syncManageActions();
   };
   const grow = document.createElement("div");
   grow.className = "grow";
@@ -560,8 +574,9 @@ function render() {
     list.forEach((t) => ul.appendChild(rowManage(t)));
     const localN = list.filter(isLocalRow).length;
     const awayN = list.length - localN;
-    $("manage-hint").textContent = selectedNames().length + " selected · " + localN + " on this host" +
+    $("manage-hint").textContent = ownedSelected().length + " selected · " + localN + " on this host" +
       (awayN ? (" · " + awayN + " remote read-only") : "");
+    syncManageActions();
     if (!list.length) ul.appendChild(emptyState("No tracks in this view", "Clear search, or leave Manage to browse artists."));
     return;
   }
@@ -720,7 +735,7 @@ $("sel-all").onclick = () => {
 };
 $("sel-none").onclick = () => { selected = {}; render(); };
 $("del-sel").onclick = async () => {
-  const names = selectedNames().filter((n) => isLocalRow((last.tracks || []).filter((t) => t.name === n)[0]));
+  const names = ownedSelected();
   if (!names.length) {
     $("err").textContent = "Select tracks on this host to delete";
     return;
@@ -729,9 +744,7 @@ $("del-sel").onclick = async () => {
   await deleteNames(names);
 };
 $("bulk-apply").onclick = async () => {
-  const names = selectedNames();
-  if (!names.length) { $("err").textContent = "Select tracks first"; return; }
-  const owned = names.filter((n) => isLocalRow((last.tracks || []).filter((t) => t.name === n)[0]));
+  const owned = ownedSelected();
   if (!owned.length) { $("err").textContent = "Remote tracks are read-only on this host"; return; }
   const patch = {};
   const artist = ($("bulk-artist").value || "").trim();
@@ -756,9 +769,9 @@ function setJobBusy(on) {
   document.body.classList.toggle("job-busy", on);
   drop.classList.toggle("locked", on);
   $("file").disabled = on;
-  $("del-sel").disabled = on;
   $("btn-manage").disabled = on;
   $("manage-done").disabled = on;
+  syncManageActions();
 }
 function showJob() {
   $("job").classList.remove("hidden", "done", "fail");

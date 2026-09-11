@@ -183,12 +183,18 @@ body.is-playing {
 }
 .now-meta-row .meta { margin: 0; }
 .stop-inline {
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: 0;
+  padding: 0;
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--muted);
+  opacity: 0.72;
+}
+.stop-inline:hover {
+  color: #fff;
+  background: transparent;
+  text-decoration: underline;
 }
 .live-dot {
   display: inline-block;
@@ -201,7 +207,7 @@ body.is-playing {
 }
 .live-dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .live-dot.seen { background: #ffffff; }
-.live-dot.dead { background: #5a5a5a; }
+.live-dot.dead { opacity: 0; }
 .now-artist {
   color: var(--muted);
   font-size: 15px;
@@ -701,18 +707,24 @@ audio#tap {
 }
 .transport .icon:disabled,
 .transport .playbig:disabled,
-.stop-inline:disabled {
-  opacity: 0.28;
-  color: #6a6a6a;
+.stop-inline:disabled,
+body.follow-lock .transport .icon,
+body.follow-lock .stop-inline {
+  opacity: 0.34;
+  color: #7a7a7a;
   background: transparent;
   cursor: not-allowed;
   box-shadow: none;
+  text-decoration: none;
 }
 .transport .icon:disabled:hover,
 .transport .playbig:disabled:hover,
-.stop-inline:disabled:hover {
+.stop-inline:disabled:hover,
+body.follow-lock .transport .icon:hover,
+body.follow-lock .stop-inline:hover {
   background: transparent;
-  color: #6a6a6a;
+  color: #7a7a7a;
+  text-decoration: none;
 }
 .transport .playbig.primary:disabled,
 .transport .playbig.primary:disabled:hover {
@@ -1037,6 +1049,12 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
 .queue li:last-child { border-bottom: 0; }
 .queue li:hover { background: rgba(255,255,255,0.04); }
 .queue li.locked {
+  opacity: 0.32;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.35);
+}
+body.follow-lock .queue li:not(.empty-state) {
   opacity: 0.32;
   cursor: not-allowed;
   pointer-events: none;
@@ -1724,6 +1742,9 @@ button.more-btn:hover { color: #fff; background: #1a1a1a; }
 .tracks li.manage-row.away {
   opacity: 0.55;
   cursor: default;
+}
+.tracks li.manage-row.away input[type=checkbox] {
+  cursor: not-allowed;
 }
 .tracks li.manage-row.away:hover { background: transparent; }
 .tracks li.manage-row.away .edit-grid input {
