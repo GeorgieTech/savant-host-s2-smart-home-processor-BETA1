@@ -168,6 +168,40 @@ body.is-playing {
   overflow: hidden;
   letter-spacing: -0.02em;
 }
+.now-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.now-line .now { flex: 1; min-width: 0; }
+.now-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+.now-meta-row .meta { margin: 0; }
+.stop-inline {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-top: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #5a5a5a;
+}
+.live-dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.live-dot.seen { background: #ffffff; }
+.live-dot.dead { background: #5a5a5a; }
 .now-artist {
   color: var(--muted);
   font-size: 15px;
@@ -180,7 +214,7 @@ body.is-playing {
 }
 .meta { color: var(--muted); font-size: 13px; margin: 6px 0 12px; }
 .meta.tight { margin: 0; text-align: right; letter-spacing: 0.04em; }
-.nowcard .meta { text-align: left; margin: 10px 0 12px; font-variant-numeric: tabular-nums; }
+.now-meta-row .meta { margin: 0; text-align: left; }
 .mode-row {
   display: flex;
   align-items: center;
@@ -261,14 +295,14 @@ body.is-playing {
 }
 .clock-pro[open] > summary::after { content: "Hide"; }
 .clock-pro[open] > summary { border-bottom: 1px solid var(--line); }
-.clock-pro .clock-stats {
+.clock-pro .wave-legend {
+  justify-content: flex-start;
   margin: 0;
-  border: 0;
-  background: transparent;
-  border-radius: 0;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
 }
 .clock-stats {
-  margin: -2px 0 14px;
+  margin: 12px 12px 0;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -665,6 +699,28 @@ audio#tap {
   color: #030303;
   border: 0;
 }
+.transport .icon:disabled,
+.transport .playbig:disabled,
+.stop-inline:disabled {
+  opacity: 0.28;
+  color: #6a6a6a;
+  background: transparent;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.transport .icon:disabled:hover,
+.transport .playbig:disabled:hover,
+.stop-inline:disabled:hover {
+  background: transparent;
+  color: #6a6a6a;
+}
+.transport .playbig.primary:disabled,
+.transport .playbig.primary:disabled:hover {
+  background: #2a2a2a;
+  color: #7a7a7a;
+  opacity: 0.45;
+  border: 0;
+}
 .transport .playbig.primary:hover {
   background: #f2f2f2;
   border: 0;
@@ -980,7 +1036,12 @@ button.crumb:disabled { opacity: 1; color: var(--bone); cursor: default; }
 }
 .queue li:last-child { border-bottom: 0; }
 .queue li:hover { background: rgba(255,255,255,0.04); }
-.queue li.locked { opacity: 0.4; cursor: not-allowed; }
+.queue li.locked {
+  opacity: 0.32;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.35);
+}
 .queue li.locked:hover { background: transparent; }
 .queue .idx {
   color: var(--ember);
@@ -1621,10 +1682,52 @@ body.playing-page canvas#viz {
 }
 .cover.round { border-radius: 50%; }
 .tracks.browse-list li {
-  grid-template-columns: 48px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   gap: 12px;
   padding: 10px 4px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.row-more { position: relative; }
+button.more-btn {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+button.more-btn:hover { color: #fff; background: #1a1a1a; }
+.row-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% - 4px);
+  z-index: 12;
+  display: grid;
+  min-width: 168px;
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+}
+.row-menu.hidden { display: none; }
+.row-menu button {
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  background: transparent;
+  min-height: 40px;
+}
+.row-menu button:hover { background: #242424; }
+.tracks li.manage-row.away {
+  opacity: 0.55;
+  cursor: default;
+}
+.tracks li.manage-row.away:hover { background: transparent; }
+.tracks li.manage-row.away .edit-grid input {
+  opacity: 0.7;
 }
 .tracks.browse-list li.letter,
 .tracks.browse-list li.empty-state,

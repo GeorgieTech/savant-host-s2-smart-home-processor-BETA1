@@ -27,10 +27,6 @@
   </header>
   <main class="page">
     <section class="card nowcard">
-      <div class="section-head">
-        <h2>Now playing</h2>
-        <span class="badge" id="state">Idle</span>
-      </div>
       <div class="job hidden" id="copyjob" aria-live="polite">
         <div class="job-head">
           <div class="job-title" id="copy-title">Copying</div>
@@ -47,9 +43,15 @@
         <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
       </div>
       <div class="now-block">
-        <div class="now" id="now">Nothing playing</div>
+        <div class="now-line">
+          <span class="live-dot" id="state" aria-label="Idle"></span>
+          <div class="now" id="now">Nothing playing</div>
+        </div>
         <div class="now-artist" id="nowartist">Pick a track in Library</div>
-        <div class="meta" id="meta">0:00 / 0:00</div>
+        <div class="now-meta-row">
+          <div class="meta" id="meta">0:00 / 0:00</div>
+          <button class="ghost stop-inline" id="stopbtn" type="button">Stop</button>
+        </div>
       </div>
       <div class="mode-row" id="moderow" hidden>
         <div class="mode-chip" role="group" aria-label="Solo or Unison optical">
@@ -63,10 +65,7 @@
         <button class="playbig primary" id="playbtn" type="button" aria-label="Play">Play</button>
         <button class="icon" id="nextbtn" type="button" aria-label="Next">⟩⟩</button>
       </div>
-      <div class="row center transport-extra">
-        <button class="ghost" id="stopbtn" type="button">Stop</button>
-      </div>
-      <p class="follow-hint" id="followhint" hidden>Conductor owns transport. Tap Solo to play from this host.</p>
+      <p class="follow-hint" id="followhint" hidden>Following another host — tap Solo to take over here.</p>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
         <div class="wave-progress hidden" id="waveprog">
@@ -77,17 +76,6 @@
           <div class="wave-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="wavebar">
             <div class="wave-progress-fill" id="wavefill"></div>
           </div>
-        </div>
-        <div class="wave-legend">
-          <span class="lo">Lows</span>
-          <span class="mid">Mids</span>
-          <span class="hi">Highs</span>
-          <span class="beats" id="wave-bpm">— BPM</span>
-          <span class="zoom-tools">
-            <button type="button" class="ghost zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
-            <span id="zoom-sec">10s</span>
-            <button type="button" class="ghost zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
-          </span>
         </div>
       </div>
       <div class="wave-over-wrap" id="seek">
@@ -138,6 +126,17 @@
             </div>
           </div>
           <p class="clock-note" id="clk-note">Host Time Clock vs decoder timing</p>
+        </div>
+        <div class="wave-legend">
+          <span class="lo">Lows</span>
+          <span class="mid">Mids</span>
+          <span class="hi">Highs</span>
+          <span class="beats" id="wave-bpm">— BPM</span>
+          <span class="zoom-tools">
+            <button type="button" class="ghost zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
+            <span id="zoom-sec">10s</span>
+            <button type="button" class="ghost zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
+          </span>
         </div>
       </details>
       <div class="err" id="err"></div>
@@ -290,7 +289,7 @@ function followingUnison() {
   return !!(last.unison || {}).following;
 }
 function followerLockTitle() {
-  return followingUnison() ? "Conductor owns Unison transport" : "";
+  return followingUnison() ? "Following another host — tap Solo to take over here." : "";
 }
 function lockFollowerTransport() {
   const lock = followingUnison();
@@ -312,6 +311,7 @@ function lockFollowerTransport() {
   }
   const hint = $("followhint");
   if (hint) hint.hidden = !lock;
+  document.body.classList.toggle("follow-lock", lock);
 }
 function isRemote(t) {
   if (!t) return false;
@@ -1121,6 +1121,7 @@ function renderQueue(st) {
     if (lock) {
       li.classList.add("locked");
       li.title = followerLockTitle();
+      li.setAttribute("aria-disabled", "true");
     } else {
       li.onclick = () => playName(t.name);
     }
@@ -1193,8 +1194,9 @@ async function tick() {
     if (!copyBusy) $("err").textContent = p.error || "";
     if (!volUser) $("vol").value = st.volume == null ? 100 : st.volume;
     const badge = $("state");
-    badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
-    badge.textContent = playing ? "Playing" : paused ? "Paused" : "Idle";
+    badge.className = "live-dot " + (playing ? "live" : paused ? "seen" : "dead");
+    badge.textContent = "";
+    badge.setAttribute("aria-label", playing ? "Playing" : paused ? "Paused" : "Idle");
     $("vizwrap").classList.toggle("live", playing);
     document.body.classList.toggle("is-playing", playing);
     renderQueue(st);
