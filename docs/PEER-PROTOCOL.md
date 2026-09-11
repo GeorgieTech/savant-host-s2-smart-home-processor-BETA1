@@ -1,6 +1,6 @@
 # CRYPT/1 — host-to-host protocol (deploy this)
 
-Status: **V1.1.13** is GitHub+lab parity for #41/#43/#47. CRYPT/1 wire is still V1.1.11. Settings `beacon.igmp_ok` / `igmp_error` stay sticky (send success does not clear a failed join). libver is the catalog ETag. BEACON carries playing/unison. Unison pause/stop confirms over HTTP `/api/clock` — CLOCK silence is not pause. Unison lock is still V1.1.12. Install on **both** live hosts in the same session.
+Status: **V1.1.13 debug.** The tag has CRYPT/1, CLOCK-lock, sticky `beacon.igmp_*`, libver ETag, and HTTP pause-confirm. Two host-comms holes remain on the tag: follower Next still dual-follows (no CLOCK), and Settings still hits `fleet?probe=1` every 4 s (hello tax + auto-relink). This branch closes both. Install on **both** live hosts in the same session.
 
 Targets: **192.168.1.179** (DualLite mule, UID `001AAE10E4090000`) and **192.168.1.142** (SHC-2000 Quad, UID `001AAE0739DB0000`). Never **.40 / .178 / .180**.
 
@@ -112,6 +112,12 @@ That is the slap-back, not paplay vs paplay.
 HTTP clocks chased each other; tracks diverged; overlapping rooms heard two performances again.
 
 **Fix:** while `unison.following`, local Next / Prev / Stop / Play-from-queue return `conductor owns Unison transport`. Conductor Next still fans follow (now with `order`). Pause / Resume / Seek still fan without changing the conductor.
+
+### 3d. V1.1.13 Settings still probes every 4 s
+
+PEER-PROTOCOL said probe stays off unless Settings asks. The V1.1.13 page calls `loadFleet(true)` on load and every 4 s → `GET /api/fleet?probe=1` → HTTP `/api/hello` on every remembered chassis, then `maybe_unison_link()`. A failed two-way unlink notify is undone on the next poll. DualLite pays hello+JSON while CLOCK and copy-then-play are running.
+
+**Fix:** idle refresh is `GET /api/fleet` (beacons only). **Scan / Refresh LAN** is the only UI probe. Unlink writes sticky intent in `peers.json` so Scan/boot cannot auto-relink until the user Links again. Boot still does **one** probe after 6 s.
 
 ### 4. Library merge refetches the whole catalog
 
