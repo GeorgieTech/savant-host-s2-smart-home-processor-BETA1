@@ -177,7 +177,7 @@ body.is-playing {
 .now-meta-row {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   margin-top: 8px;
 }
