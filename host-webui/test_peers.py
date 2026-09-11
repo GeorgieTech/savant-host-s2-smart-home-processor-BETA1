@@ -284,6 +284,83 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual(len(calls), 1)
 
+    def test_fetch_shelf_refetches_when_libver_changes(self):
+        calls = []
+        catalogs = [
+            [{"name": "Glow.flac", "size": 12, "mtime": 8}],
+            [{"name": "Glow.flac", "size": 12, "mtime": 9}, {"name": "New.flac", "size": 4, "mtime": 1}],
+        ]
+        def fake(url, timeout=20):
+            calls.append(url)
+            return {"ok": True, "tracks": catalogs[min(len(calls) - 1, 1)]}
+        idx = peers.PeerIndex(path="/no/such.json", http=fake)
+        idx._cfg = {"id": "v", "shelves": [{"id": "s", "url": "http://192.168.1.179"}]}
+        crypt_wire = __import__("crypt_wire")
+        idx.note_beacon({
+            "crypt": 1,
+            "uid": "001AAE10E4090000",
+            "id": "crypt-001aae10e4090000",
+            "host": "crypt-001aae10e4090000",
+            "libver": crypt_wire.libver(catalogs[0]),
+            "tracks": 1,
+        }, "192.168.1.179")
+        a, err = idx.fetch_shelf({"url": "http://192.168.1.179"})
+        self.assertEqual(err, "")
+        self.assertEqual(len(a), 1)
+        idx.note_beacon({
+            "crypt": 1,
+            "uid": "001AAE10E4090000",
+            "id": "crypt-001aae10e4090000",
+            "host": "crypt-001aae10e4090000",
+            "libver": crypt_wire.libver(catalogs[1]),
+            "tracks": 2,
+        }, "192.168.1.179")
+        b, err = idx.fetch_shelf({"url": "http://192.168.1.179"})
+        self.assertEqual(err, "")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(b), 2)
+        self.assertEqual([t["name"] for t in b], ["Glow.flac", "New.flac"])
+
+    def test_beacon_bin_sets_playing_and_unison_flags(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        idx._local_play_flags = lambda: (True, True)
+        pkt = idx._beacon_bin(7)
+        out = __import__("crypt_wire").decode(pkt)
+        self.assertTrue(out["playing"])
+        self.assertTrue(out["unison"])
+        payload = idx._beacon_payload()
+        raw = json.loads(payload.decode("utf-8"))
+        self.assertTrue(raw["playing"])
+        self.assertTrue(raw["unison"])
+
+    def test_note_beacon_stores_playing_and_unison(self):
+        idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
+        idx.note_beacon({
+            "crypt": 1,
+            "uid": "001AAE10E4090000",
+            "id": "crypt-001aae10e4090000",
+            "host": "crypt-001aae10e4090000",
+            "playing": True,
+            "unison": True,
+            "tracks": 3,
+        }, "192.168.1.179")
+        rows = [r for r in idx.roster(probe=False) if r.get("uid") == "001AAE10E4090000"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["playing"])
+        self.assertTrue(rows[0]["unison"])
+        idx.note_beacon({
+            "crypt": 1,
+            "uid": "001AAE10E4090000",
+            "id": "crypt-001aae10e4090000",
+            "host": "crypt-001aae10e4090000",
+            "playing": False,
+            "unison": False,
+            "tracks": 3,
+        }, "192.168.1.179")
+        rows = [r for r in idx.roster(probe=False) if r.get("uid") == "001AAE10E4090000"]
+        self.assertFalse(rows[0]["playing"])
+        self.assertFalse(rows[0]["unison"])
+
     def test_link_rejects_forbidden_hosts(self):
         idx = peers.PeerIndex(path="/no/such.json", http=lambda url: {}, seen_path="/no/such/seen.json")
         ok, err = idx.link("http://192.168.1.40")
