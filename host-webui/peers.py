@@ -26,7 +26,7 @@ except ImportError:
 from player import MUSIC_DIR
 import crypt_wire
 
-VERSION = "1.1.14"
+VERSION = "1.1.15"
 PEERS_FILE = os.environ.get("CRYPT_PEERS", "/data/crypt/peers.json")
 SEEN_FILE = os.environ.get("CRYPT_SEEN", "/data/crypt/seen.json")
 HOT_FILE = os.environ.get("CRYPT_HOT", "/data/crypt/hot.json")
@@ -742,7 +742,7 @@ class PeerIndex(object):
             return hit[1], hit[2]
         try:
             try:
-                data = self.http(url + "/api/library?local=1", timeout=20)
+                data = self.http(url + "/api/library?local=1", timeout=6)
             except TypeError:
                 data = self.http(url + "/api/library?local=1")
             err = ""

@@ -914,45 +914,56 @@ document.querySelector(".tabbar").addEventListener("click", (e) => {
   e.stopPropagation();
 }, true);
 
+function applyLib(st, lib, force) {
+  last = Object.assign({}, st, lib);
+  if (lib.genres) fillGenres(lib.genres);
+  const p = st.player || last.player || {};
+  const peer = lib.peer || st.peer || {};
+  const shelves = peer.shelves || [];
+  $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.host || st.model || "SHR-S2") + " · TOSLINK");
+  const lead = $("lib-lead");
+  if (lead) lead.textContent = "Tap a track to play.";
+  const shelfHint = $("shelf-hint");
+  if (shelves.length) {
+    shelfHint.hidden = false;
+    shelfHint.textContent = "Linked shelf — remote tracks copy here, then play.";
+  } else {
+    shelfHint.hidden = true;
+  }
+  const d = lib.disk || st.disk || {};
+  const n = (lib.tracks || []).length;
+  const scan = lib.scanning ? " · reading tags" : "";
+  $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
+  if (!jobBusy) {
+    $("err").textContent = (st.player && st.player.error) || peer.error || "";
+  }
+  const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
+  const homes = (lib.tracks || []).map((t) => (t.home_stamp || "") + (t.here ? "h" : "")).join("");
+  const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",") + ":" + homes;
+  if (manage && !force) return;
+  if (force || next !== stamp) {
+    stamp = next;
+    render();
+  }
+}
 async function tick(force) {
   if (jobBusy && !force) return;
   try {
     const st = await (await fetch("/api/status")).json();
+    if (!(last.tracks || []).length) {
+      try {
+        const local = await (await fetch("/api/library?local=1")).json();
+        applyLib(st, local, true);
+      } catch (e) {}
+    }
     const lib = await (await fetch("/api/library")).json();
-    last = Object.assign({}, st, lib);
-    if (lib.genres) fillGenres(lib.genres);
-    const p = st.player || {};
-    const peer = lib.peer || st.peer || {};
-    const shelves = peer.shelves || [];
-    $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.host || st.model || "SHR-S2") + " · TOSLINK");
-    const lead = $("lib-lead");
-    if (lead) lead.textContent = "Tap a track to play.";
-    const shelfHint = $("shelf-hint");
-    if (shelves.length) {
-      shelfHint.hidden = false;
-      shelfHint.textContent = "Linked shelf — remote tracks copy here, then play.";
-    } else {
-      shelfHint.hidden = true;
-    }
-    const d = lib.disk || st.disk || {};
-    const n = (lib.tracks || []).length;
-    const scan = lib.scanning ? " · reading tags" : "";
-    $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
-    if (!jobBusy) {
-      $("err").textContent = (st.player && st.player.error) || peer.error || "";
-    }
-    const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
-    const homes = (lib.tracks || []).map((t) => (t.home_stamp || "") + (t.here ? "h" : "")).join("");
-    const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",") + ":" + homes;
-    if (manage && !force) return;
-    if (force || next !== stamp) {
-      stamp = next;
-      render();
-    }
+    applyLib(st, lib, force);
   } catch (e) {
     $("err").textContent = "Host is not answering";
   }
 }
+tick(true);
+setInterval(() => tick(false), 2500);
 document.addEventListener("click", () => {
   document.querySelectorAll(".row-menu").forEach((el) => el.classList.add("hidden"));
 });

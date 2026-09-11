@@ -208,8 +208,9 @@ def _library(local_only=False):
     return PEERS.merge(local)
 
 
-def _library_payload(local_only=False):
-    tracks = _library(local_only=local_only)
+def _library_payload(local_only=False, tracks=None):
+    if tracks is None:
+        tracks = _library(local_only=local_only)
     peer = PEERS.snapshot()
     peer["error"] = PEERS.error
     return {
@@ -303,9 +304,13 @@ class CryptApp(object):
         self._status_refresh = 0.0
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, local_only=False):
+        # Merge may HTTP-fetch a shelf. Do not hold APP.lock across that,
+        # or two linked hosts deadlock: each /api/library waits on the
+        # other's /api/library?local=1, which also called refresh().
+        tracks = _library(local_only=local_only)
         with self.lock:
-            self.tracks = _library()
+            self.tracks = tracks
             names = [t["name"] for t in self.tracks]
             name_set = set(names)
             self.order = [n for n in self.order if n in name_set]
@@ -316,6 +321,10 @@ class CryptApp(object):
                 self.index = self.order.index(cur)
             elif self.index >= len(self.order):
                 self.index = len(self.order) - 1 if self.order else -1
+
+    def catalog_snapshot(self):
+        with self.lock:
+            return list(self.tracks)
 
     def _upcoming(self, order, tracks, idx, limit=5):
         by_name = dict((t["name"], t) for t in tracks)
@@ -709,9 +718,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, APP.report(name, fetch=False))
                 return
             if raw_path == "/api/library":
-                APP.refresh()
                 local_only = _qparam(qs, "local") in ("1", "true", "yes")
-                self._send(200, _library_payload(local_only=local_only))
+                APP.refresh(local_only=local_only)
+                self._send(200, _library_payload(local_only=local_only, tracks=APP.catalog_snapshot()))
                 return
             if raw_path == "/api/peers":
                 snap = PEERS.snapshot()

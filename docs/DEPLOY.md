@@ -1,4 +1,4 @@
-# Deploy notes — CRYPT V1.1.14
+# Deploy notes — CRYPT V1.1.15
 
 Targets: **192.168.1.179** (DualLite S2) and **192.168.1.142** (SHC-S2-00 Quad). Never 192.168.1.40 / .178 / .180.
 
