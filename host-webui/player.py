@@ -238,10 +238,22 @@ def discipline_latency(state, sample, capture=PLL_CAPTURE, hold=PLL_HOLD):
     return state
 
 
+# Soft ahead-slew. Tens of ms is the Unison success band (PEER-PROTOCOL).
+# V1.1.12 SIGSTOP'd the full 18–80 ms lead (≤80 ms) every 0.4 s — robotic
+# when Quad sits ahead of DualLite. Hold that slight lead; bleed a larger
+# one with a short pause. Catch 120 ms / 8 s and jump ≥1.25 s stay rare.
+FOLLOW_AHEAD_S = 0.05
+SLEW_MAX_S = 0.024
+SLEW_FRAC = 0.4
+SLEW_MIN_S = 0.008
+SLEW_COOL_S = 1.2
+
+
 def follow_plan(
     local_heard,
     target_heard,
     hold_s=0.018,
+    ahead_s=FOLLOW_AHEAD_S,
     catch_s=0.12,
     jump_s=1.25,
     warming=False,
@@ -254,6 +266,10 @@ def follow_plan(
     Seek restarts ffmpeg+paplay and unlocks the latency PLL (~400 ms path).
     Only jump the decoder for a real discontinuity, or one catch-up after
     the pipeline has filled. Ride CLOCK otherwise — do not chase path delay.
+
+    Local slightly ahead (hold_s..ahead_s) holds — DualLite-conducts-Quad
+    often lives there. SIGSTOP slew starts only past ahead_s, and
+    follow_heard keeps that pause short. Do not seek the 18–80 ms band.
     """
     try:
         err = float(target_heard) - float(local_heard)
@@ -267,9 +283,21 @@ def follow_plan(
         return "seek", err
     if abs(err) >= catch_s and last_seek_age >= 2.0 and good_age >= catch_age:
         return "seek", err
-    if err < -hold_s:
+    if err <= -ahead_s:
         return "slew", err
     return "hold", err
+
+
+def slew_ahead_seconds(err, max_s=SLEW_MAX_S, frac=SLEW_FRAC, min_s=SLEW_MIN_S):
+    """How long to SIGSTOP when follow_plan says slew. Not the full lead."""
+    try:
+        lead = abs(float(err))
+    except (TypeError, ValueError):
+        return 0.0
+    seconds = min(max_s, lead * frac)
+    if seconds < min_s:
+        return 0.0
+    return seconds
 
 
 def discipline_decoder(corr, mono_s, ref_s, alpha=0.12, snap_s=0.35):
@@ -545,12 +573,14 @@ class HostPlayer(object):
             return True
         if plan == "slew":
             now2 = time.monotonic()
-            if now2 - float(self._sync_slew_at or 0.0) < 0.4:
+            if now2 - float(self._sync_slew_at or 0.0) < SLEW_COOL_S:
                 return True
             if self._sync_slewing:
                 return True
+            seconds = slew_ahead_seconds(err)
+            if seconds < SLEW_MIN_S:
+                return True
             self._sync_slew_at = now2
-            seconds = min(0.08, abs(float(err)))
             gen = self.generation
             threading.Thread(
                 target=self._slew_ahead,
@@ -567,8 +597,8 @@ class HostPlayer(object):
 
     def _slew_ahead(self, seconds, gen=None):
         """Local optical is ahead: pause the pipe briefly. Do not restart ffmpeg."""
-        seconds = max(0.0, min(0.08, float(seconds or 0.0)))
-        if seconds < 0.008:
+        seconds = max(0.0, min(SLEW_MAX_S, float(seconds or 0.0)))
+        if seconds < SLEW_MIN_S:
             return True
         self._sync_slewing = True
         try:
