@@ -6,6 +6,8 @@ Targets: **192.168.1.179** (DualLite mule, UID `001AAE10E4090000`) and **192.168
 
 Python 3.8 **stdlib only**. No apt. No extra daemons. Copy-then-play stays. Unique by Savant UID.
 
+Unison / CRYPT/1 peers must share **one L2** and **`192.168.1.0/24`**. CLOCK and BEACON are multicast TTL **1** (`crypt_wire.py`); they do not cross a router. The peer allow-list is hard `192.168.1.*` (`LAN_PREFIX` in `peers.py`) — a different prefix is a deliberate product change, not a switch trick. Identity prefers **`eth0`** and skips `wlan*`. Private-link / dual-NIC waits on hardware + product support. Switch IGMP (snooping + exactly one querier): [DEPLOY.md](DEPLOY.md).
+
 This file is the contract for the next grok **build + deploy**. The code in this branch already contains the wire codec and the dual-stack path; deploy both chassis in one window so one host is never speaking only JSON while the other has already dropped broadcast.
 
 ## What we measured
@@ -16,7 +18,9 @@ This cloud agent cannot complete a two-host LAN conversation. UDP probes to `:41
 2. Static runtime of `peers.py` + `unison.py` as shipped in V1.1.10.
 3. New `host-webui/test_crypt_wire.py` round-trips for CRYPT/1.
 
-Lab confirmation after deploy — first-class check on **both** hosts (as `RPM`). `ss` plus a join-group recv of `CRPT` is required; send-to-group does not prove membership (`IP_MULTICAST_LOOP` is 0). Settings must show `beacon.igmp_error` if `IP_ADD_MEMBERSHIP` failed.
+Lab Path A (Bastion, after #41 on iron — not from this cloud agent): peer `CRPT` recv **PASS** both ways on `239.18.20.1:41880`; `beacon.igmp_ok` true; Unison `via=udp`. Group is TTL 1; L2 multicast MAC `01:00:5e:12:14:01`. That is **not** Unison earshot PASS (#9). JSON broadcast drop (#8) stays HOLD until that earshot.
+
+Lab confirmation after deploy — first-class check on **both** hosts (as `RPM`). `ss` plus a join-group recv of `CRPT` is required; send-to-group does not prove membership (`IP_MULTICAST_LOOP` is 0). After #41, Settings/`fleet` shows `beacon.igmp_ok` when join succeeded, or `beacon.igmp_error` when `IP_ADD_MEMBERSHIP` failed. **Live ≠ membership.**
 
 ```sh
 ss -ulnp | grep 41880
@@ -61,7 +65,7 @@ That works for two boxes on a quiet lab LAN. It does not scale, and it burns Dua
 
 `192.168.1.255` wakes every IPv4 stack on the VLAN (phones, Savant, printers). Cheap switches sometimes rate-limit or drop directed broadcast. There is no group: a third CRYPT host cannot join without the whole LAN hearing it. JSON text is ~180 bytes plus `json.loads` on DualLite every packet.
 
-**Fix:** administratively scoped **multicast** `239.18.20.1:41880`, TTL **1**, IGMP join on `eth0`. Only CRYPT members receive it. Binary CRYPT/1 is ~100 bytes and checksummed.
+**Fix:** administratively scoped **multicast** `239.18.20.1:41880`, TTL **1**, IGMP join on `eth0`. Only CRYPT members receive it. Binary CRYPT/1 is ~100 bytes and checksummed. TTL 1 plus the `192.168.1.*` allow-list means the pair must sit on **one L2**. IGMP snooping without a querier ages membership out (RFC 4541) — CLOCK dies while JSON broadcast can still look Live. Do not use multicast storm-control on CRYPT access ports as an IGMP substitute. Ops checklist: [DEPLOY.md](DEPLOY.md).
 
 ### 2. One thread both sends and blocks on `recvfrom`
 
@@ -168,7 +172,7 @@ Optional later: `libver u64 | tracks u16` when the catalog changes, so peers do 
 
 Copy-then-play is unchanged on purpose. Streaming into ffmpeg would fight the Time Clock and the optical jack. CLUSTER.md’s four-host farm still wants a separate console later; this protocol is what the chassis speak **to each other** until that console exists.
 
-Multicast is the right default on this VLAN. Unicast CLOCK to the linked peer IP is a fine extra (lower loss on cheap Wi-Fi) but both hosts are wired `eth0` today — group send is enough.
+Multicast is the right default on this VLAN. Unicast CLOCK to the linked peer IP is a **later** idea (lower loss on cheap Wi-Fi). It is **not** a substitute for IGMP join (#24/#41) or snooping + one querier (#6). Both hosts are wired `eth0` today — group send is the Unison hot path. Private-link / dual-NIC is deferred (#7).
 
 ## Files grok must ship
 
@@ -209,7 +213,7 @@ Restart **.179 and .142 within a minute of each other**. Pulse / hostname units 
 ### Checks
 
 1. `systemctl is-active crypt-web` is `active` on both.
-2. On **both** hosts: `ss -ulnp | grep 41880` shows crypt-web bound `0.0.0.0:41880`, and the join-group recv snippet above prints a `CRPT` datagram within 6 s. Optional: `grep 239.18.20.1 /proc/net/igmp`. Send success alone is not membership — Settings must show an IGMP join error if join failed, even when blades are Live via JSON broadcast.
+2. On **both** hosts: `ss -ulnp | grep 41880` shows crypt-web bound `0.0.0.0:41880`, and the join-group recv snippet above prints a `CRPT` datagram within 6 s. Optional: `grep 239.18.20.1 /proc/net/igmp`. Send success alone is not membership. After #41, Settings/`fleet` `beacon.igmp_ok` must be true (or `igmp_error` if join failed). **Live ≠ membership** — JSON to `192.168.1.255` can still paint Live. #8 broadcast drop stays HOLD until sustained earshot (#9).
 3. Settings → On the LAN still shows the other UID (JSON beacon covers mixed seconds).
 4. After both are up, `python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1/api/hello').read()[:200])"` still returns `crypt:1`.
 5. Link remains two-way. Play a shelf track: still copy then TOSLINK.
@@ -230,11 +234,11 @@ Copy the V1.1.10 `peers.py` / `unison.py` / `server.py` back and **delete** `/da
 
 ## Phase 2 (do not block this deploy)
 
-- Drop JSON broadcast once both hosts have been on CRYPT/1 for a week.
+- Drop JSON broadcast once both hosts have been on CRYPT/1 for a week — **#8 HOLD** until sustained earshot (#9); Path A multicast PASS is not that gate.
 - HTTP `Range` resume on `ensure()`.
 - Slim `/api/hello` (no gossip `seen` blob).
 - Prefetch **next** hot-cache file on the listening host (CLUSTER.md).
-- Optional unicast CLOCK to the linked IPv4 in addition to the group.
+- Optional unicast CLOCK to the linked IPv4 in addition to the group — not a substitute for IGMP / same-L2 multicast; track separately if pursued.
 
 ## Tests before deploy
 
