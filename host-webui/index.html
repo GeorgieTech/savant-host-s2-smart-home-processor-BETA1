@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07060a">
+<meta name="theme-color" content="#030303">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CRYPT">
@@ -28,7 +28,7 @@
   <main class="page">
     <section class="card nowcard">
       <div class="section-head">
-        <h2>What’s playing</h2>
+        <h2>Now playing</h2>
         <span class="badge" id="state">Idle</span>
       </div>
       <div class="job hidden" id="copyjob" aria-live="polite">
@@ -42,8 +42,15 @@
         <div class="job-detail" id="copy-detail"></div>
         <div class="job-stay" id="copy-stay">Copy-then-play — this TOSLINK waits for the file.</div>
       </div>
-      <div class="now" id="now">Nothing playing</div>
-      <div class="meta" id="meta">0:00 / 0:00</div>
+      <div class="viz-wrap" id="vizwrap">
+        <canvas id="viz" aria-label="Album art visualizer"></canvas>
+        <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
+      </div>
+      <div class="now-block">
+        <div class="now" id="now">Nothing playing</div>
+        <div class="now-artist" id="nowartist">Pick a track in Library</div>
+        <div class="meta" id="meta">0:00 / 0:00</div>
+      </div>
       <div class="mode-row" id="moderow" hidden>
         <div class="mode-chip" role="group" aria-label="Solo or Unison optical">
           <button type="button" id="mode-solo">Solo</button>
@@ -51,13 +58,9 @@
         </div>
         <span class="mode-badge" id="modebadge" hidden></span>
       </div>
-      <div class="viz-wrap" id="vizwrap">
-        <canvas id="viz" aria-label="Playback visualizer"></canvas>
-        <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
-      </div>
       <div class="transport">
         <button class="icon" id="prevbtn" type="button" aria-label="Previous">⟨⟨</button>
-        <button class="playbig primary" id="playbtn" type="button">Play</button>
+        <button class="playbig primary" id="playbtn" type="button" aria-label="Play">Play</button>
         <button class="icon" id="nextbtn" type="button" aria-label="Next">⟩⟩</button>
       </div>
       <div class="row center transport-extra">
@@ -139,7 +142,7 @@
       </details>
       <div class="err" id="err"></div>
     </section>
-    <section class="card">
+    <section class="card queue-card">
       <div class="section-head">
         <h2>Up next</h2>
         <span class="meta tight" id="qmeta"></span>
@@ -833,18 +836,18 @@ function drawViz(ts) {
 
   ctx.clearRect(0, 0, w, h);
   const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, "rgba(155,28,28,0.16)");
-  g.addColorStop(0.55, "rgba(7,6,10,0.08)");
-  g.addColorStop(1, "rgba(7,6,10,0.92)");
+  g.addColorStop(0, "rgba(255,43,43,0.16)");
+  g.addColorStop(0.45, "rgba(18,18,18,0.4)");
+  g.addColorStop(1, "rgba(3,3,3,0.98)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
   const cx = w / 2;
   const cy = h * 0.58;
   const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, h * 0.7);
-  rg.addColorStop(0, "rgba(224,122,58," + (0.18 + energy * 0.35) + ")");
-  rg.addColorStop(0.35, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
-  rg.addColorStop(1, "rgba(7,6,10,0)");
+  rg.addColorStop(0, "rgba(255,255,255," + (0.08 + energy * 0.18) + ")");
+  rg.addColorStop(0.4, "rgba(255,43,43," + (0.10 + energy * 0.16) + ")");
+  rg.addColorStop(1, "rgba(3,3,3,0)");
   ctx.fillStyle = rg;
   ctx.fillRect(0, 0, w, h);
 
@@ -854,11 +857,11 @@ function drawViz(ts) {
     const x = gap + i * (bw + gap);
     const y = h - bh - h * 0.08;
     const bar = ctx.createLinearGradient(0, y, 0, h);
-    bar.addColorStop(0, "#f3c07a");
-    bar.addColorStop(0.35, "#e07a3a");
-    bar.addColorStop(1, "#5c1010");
+    bar.addColorStop(0, "#ffffff");
+    bar.addColorStop(0.45, "#ff6b6b");
+    bar.addColorStop(1, "#5a0000");
     ctx.fillStyle = bar;
-    ctx.globalAlpha = 0.55 + energy * 0.45;
+    ctx.globalAlpha = 0.62 + energy * 0.38;
     ctx.fillRect(x, y, Math.max(1, bw), bh);
   }
   ctx.globalAlpha = 1;
@@ -1172,7 +1175,12 @@ async function tick() {
       if (u.drift_ms != null) line += " · " + u.drift_ms + " ms";
     }
     $("hostline").textContent = line;
-    $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
+    const row = (p.name && libByName[p.name]) || {};
+    $("now").textContent = p.name ? (row.title || titleOf(p.name)) : "Nothing playing";
+    const artistEl = $("nowartist");
+    if (artistEl) {
+      artistEl.textContent = p.name ? (row.artist || "Unknown artist") : "Pick a track in Library";
+    }
     const ck = p.clock || {};
     const heard = (ck.heard != null ? ck.heard : p.position) || 0;
     const playback = (ck.playback != null ? ck.playback : p.playback) || heard;
@@ -1181,6 +1189,7 @@ async function tick() {
     paintClockStats(heard, playback, true);
     loadWave(p.name || "");
     $("playbtn").textContent = playing ? "Pause" : "Play";
+    $("playbtn").setAttribute("aria-label", playing ? "Pause" : "Play");
     if (!copyBusy) $("err").textContent = p.error || "";
     if (!volUser) $("vol").value = st.volume == null ? 100 : st.volume;
     const badge = $("state");

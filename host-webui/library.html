@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07060a">
+<meta name="theme-color" content="#030303">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CRYPT">
@@ -138,6 +138,24 @@ function esc(s) {
 function titleOf(t) {
   if (t && t.title) return t.title;
   return String((t && t.name) || t || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+}
+function hashName(s) {
+  let h = 2166136261;
+  const t = String(s || "crypt");
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 1;
+}
+function coverHTML(seed, letters, round) {
+  const h = hashName(seed);
+  const h1 = h % 360;
+  const h2 = (h >> 9) % 360;
+  const l1 = 11 + (h % 7);
+  const l2 = 5 + ((h >> 4) % 5);
+  const init = esc(String(letters || seed || "?").replace(/^the\s+/i, "").trim().slice(0, 2).toUpperCase() || "?");
+  return "<span class='cover" + (round ? " round" : "") + "' style='background:linear-gradient(145deg,hsl(" + h1 + ",40%," + l1 + "%),hsl(" + h2 + ",36%," + l2 + "%))'>" + init + "</span>";
 }
 function q() { return ($("filter").value || "").trim().toLowerCase(); }
 function hit(t) {
@@ -457,7 +475,8 @@ function rowTrack(t, opts) {
   if (where) bits.push(where);
   const sub = bits.join(" · ");
   const chip = t.home_stamp ? ("<span class='home-chip " + (t.here ? "here" : "away") + "'>" + esc(t.home_stamp) + "</span>") : "";
-  li.innerHTML = "<div class='grow'><div class='name'>" + chip + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
+  li.innerHTML = coverHTML(t.name || titleOf(t), titleOf(t)) +
+    "<div class='grow'><div class='name'>" + chip + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
   if (!(opts && opts.noAdd)) {
     const add = document.createElement("button");
     add.textContent = "Add";
@@ -489,10 +508,12 @@ function render() {
   const ul = $("list");
   const actions = $("actions");
   ul.innerHTML = "";
+  ul.className = "tracks browse-list";
   actions.innerHTML = "";
   actions.hidden = true;
   const now = playingName();
   if (manage) {
+    ul.className = "tracks";
     const list = viewTracks();
     list.forEach((t) => ul.appendChild(rowManage(t)));
     $("manage-hint").textContent = selectedNames().length + " selected · " + list.length + " in this view";
@@ -513,7 +534,8 @@ function render() {
         ul.appendChild(h);
       }
       const li = document.createElement("li");
-      li.innerHTML = "<span class='name'>" + esc(a.name) + "</span><span class='size'>" + a.count + "</span>";
+      li.innerHTML = coverHTML(a.name, a.name, true) +
+        "<span class='name'>" + esc(a.name) + "</span><span class='size'>" + a.count + "</span>";
       li.onclick = () => { artist = a.name; album = ""; render(); };
       ul.appendChild(li);
     });
@@ -524,9 +546,12 @@ function render() {
     }
   } else if ((view === "artists" && artist && !album) || (view === "albums" && !album)) {
     const list = albums(view === "artists" ? artist : "");
+    ul.className = "tracks album-grid";
     list.forEach((a) => {
       const li = document.createElement("li");
-      li.innerHTML = "<div class='grow'><div class='name'>" + esc(a.album) + "</div><div class='sub'>" + esc(a.artist) + "</div></div><span class='size'>" + a.count + "</span>";
+      li.innerHTML = coverHTML((a.artist || "") + a.album, a.album) +
+        "<div class='name'>" + esc(a.album) + "</div>" +
+        "<div class='sub'>" + esc(a.artist) + " · " + a.count + "</div>";
       li.onclick = () => { artist = a.artist; album = a.album; render(); };
       ul.appendChild(li);
     });
@@ -552,7 +577,8 @@ function render() {
     const s = q();
     playlists().filter((p) => !s || p.name.toLowerCase().indexOf(s) >= 0).forEach((p) => {
       const li = document.createElement("li");
-      li.innerHTML = "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
+      li.innerHTML = coverHTML(p.name, p.name) +
+        "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
       const play = document.createElement("button");
       play.textContent = "Play";
       play.onclick = (e) => {
