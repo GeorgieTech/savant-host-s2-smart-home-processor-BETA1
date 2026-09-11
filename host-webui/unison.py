@@ -225,26 +225,54 @@ class Unison(object):
             if clock_age <= 0.25:
                 time.sleep(0.05)
                 continue
-            try:
-                data = self.get(url + "/api/clock", timeout=2)
-                player_snap = (data or {}).get("player") or {}
-                clock = player_snap.get("clock") or {}
-                heard = clock.get("heard")
-                playing = bool(player_snap.get("playing"))
-                local = player.snapshot() if player is not None else {}
-                if playing and heard is not None and local.get("playing"):
-                    player.follow_heard(heard)
-                    after = player.snapshot()
-                    local_heard = ((after.get("clock") or {}).get("heard"))
-                    if local_heard is not None and not (after.get("clock") or {}).get("warming"):
-                        with self.lock:
-                            self._drift_ms = int(round((float(heard) - float(local_heard)) * 1000.0))
-                elif not playing:
-                    with self.lock:
-                        self._drift_ms = None
-            except Exception:
-                pass
+            # CLOCK quiet is not pause. HTTP confirm; unreachable holds.
+            self._fallback_http_clock()
             time.sleep(0.35)
+
+    def _fallback_http_clock(self):
+        """GET /api/clock when UDP CLOCK is quiet. Silence is not pause; miss holds."""
+        with self.lock:
+            url = self._follow_url
+            on = self._on
+        if not on or not url:
+            return
+        try:
+            data = self.get(url + "/api/clock", timeout=2)
+        except Exception:
+            return
+        self._apply_http_clock(data)
+
+    def _apply_http_clock(self, data):
+        player_snap = (data or {}).get("player")
+        if not isinstance(player_snap, dict) or "playing" not in player_snap:
+            return
+        clock = player_snap.get("clock") or {}
+        heard = clock.get("heard")
+        playing = bool(player_snap.get("playing"))
+        paused = bool(player_snap.get("paused"))
+        player = self.player
+        local = player.snapshot() if player is not None else {}
+        with self.lock:
+            following = bool(self._on and self._follow_url)
+        if playing and heard is not None and local.get("playing"):
+            player.follow_heard(heard)
+            after = player.snapshot()
+            local_heard = ((after.get("clock") or {}).get("heard"))
+            if local_heard is not None and not (after.get("clock") or {}).get("warming"):
+                with self.lock:
+                    self._drift_ms = int(round((float(heard) - float(local_heard)) * 1000.0))
+            return
+        if playing:
+            return
+        with self.lock:
+            self._drift_ms = None
+        if not following or player is None or not local.get("playing"):
+            return
+        if paused:
+            player.pause()
+            return
+        player.stop()
+        self.unfollow()
 
 
 def urlparse_host(url):
