@@ -1,6 +1,6 @@
 # Future plan — four SHC-2000 CRYPT engines
 
-Status: **two live chassis + the original farm plan**. DualLite mule **192.168.1.179** and first SHC-2000 **192.168.1.142** run the same CRYPT UI (**V1.1.13**), share one catalog, and can Unison their TOSLINKs. Path A multicast (`239.18.20.1:41880`) is proven: GS752TPP core `.10` is the IGMP querier, both CRYPT hosts `igmp_ok`, peer `CRPT` PASS. Three more Quads are not on the LAN yet. The four-host farm below (shard on workers, hot cache on playback, separate funnel app) is **still the target**. What we shipped instead, first, is host-to-host CRYPT on the two boxes we have — see **Shipped so far vs the brainstorm**. The wire is [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
+Status: **two live chassis + the original farm plan**. DualLite mule **192.168.1.179** and first SHC-2000 **192.168.1.142** run the same CRYPT UI (**V1.1.13**), share one catalog, and can Unison their TOSLINKs. Path A multicast (`239.18.20.1:41880`, TTL 1) is proven: GS752TPP core `.10` is the VLAN 1 IGMP querier, SW2 `.11` snoops, both CRYPT hosts `igmp_ok`, peer `CRPT` PASS, Unison `via=udp`. That is **not** Unison earshot PASS (#9). Three more Quads are not on the LAN yet. The four-host farm below (shard on workers, hot cache on playback, separate funnel app) is **still the target**. What we shipped instead, first, is host-to-host CRYPT on the two boxes we have — see **Shipped so far vs the brainstorm**. The wire is [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
 Goal: three SHC-2000 hosts are **library + job workers**. A fourth SHC-2000 is the **TOSLINK playback cache** — it lists the whole fleet library, but only keeps a few files on its own eMMC while they are about to play, playing, or just played. A **separate application** (not this DualLite UI) sits in front, owns the fleet catalog, copies bytes when needed, fans research jobs out, and consumes the JSON those four hosts produce.
 
@@ -57,7 +57,7 @@ Workaround: **copy, then play**. Worker B keeps the home copy. Playback gets a t
 
 The live host at `.179` is an **SHR-S2-00 DualLite**. Do **not** `dd` that image onto an SHC-2000 (`/data` partition layout differs: DualLite `mmcblk0p2` vs Quad `p3`). Convert each SHC-2000 the same way we converted `.179`, then install CRYPT from this repo.
 
-Keep them on `192.168.1.0/24` with this project’s existing “never .40 / .178 / .180” rule.
+Keep them on `192.168.1.0/24` with this project’s existing “never .40 / .178 / .180” rule. Unison / CRYPT/1 peers must share that **same L2**: CLOCK and BEACON are TTL **1**, so a VLAN/router hop dies even when HTTP still works. A different prefix needs a deliberate `LAN_PREFIX` change in `peers.py` — not a “private segment” on another subnet. These chassis are **eth0-only**; private-link / dual-NIC is deferred until hardware + product support exist. Switch IGMP (snooping + exactly one querier): [DEPLOY.md](DEPLOY.md).
 
 | Name | IP | Chassis | Notes |
 |---|---|---|---|
@@ -129,7 +129,7 @@ Version trail of the live pair:
 | V1.1.10 | Link is two-way. Merged catalog with `home_stamp`. Unison TOSLINK (HTTP clock). |
 | V1.1.11 | CRYPT/1 multicast + libver so merge is not a full JSON refetch every 8 s. |
 | V1.1.12 | Unison **rides CLOCK** instead of seeking the ~400 ms path delay (that seek was the hallway echo). |
-| V1.1.13 | Sticky `beacon.igmp_*` (#41). libver is an ETag; BEACON advertises playing/unison (#43). Unison pause/stop confirms over HTTP `/api/clock` (#47). Lab Path A: GS752TPP `.10` querier + snooping on `.10`/`.11`; peer `CRPT` PASS; `igmp_ok` true. Unison earshot still not a hold. |
+| V1.1.13 | Sticky `beacon.igmp_*` (#41). libver is an ETag; BEACON advertises playing/unison (#43). Unison pause/stop confirms over HTTP `/api/clock` (#47). Lab Path A: GS752TPP `.10` querier + snooping on `.11`; peer `CRPT` PASS; `igmp_ok` true; Unison `via=udp`. Unison earshot still not a hold (#9). |
 
 Hard rules that did **not** change: no AirPlay / Spotify / DLNA / NAS; no ffmpeg HTTP; stdlib only; never `.40` / `.178` / `.180`; do not `dd` DualLite eMMC onto a Quad; do not spoof Carrillos UID.
 
@@ -141,7 +141,7 @@ Hard rules that did **not** change: no AirPlay / Spotify / DLNA / NAS; no ffmpeg
 - Hot-cache eviction (now / next / last) and prefetch of queue +1.
 - Delete fan-out: owner, then drop hot copies and `/data/crypt/*` JSON everywhere.
 - Funnel app: one catalog, copy-then-play onto **one** playback jack, Report×3, Wave on owner, Lyrics on C, MusicBrainz token bucket 1/s.
-- Drop JSON broadcast after CRYPT/1 has been on both hosts for a while ([PEER-PROTOCOL.md](PEER-PROTOCOL.md) phase 2 / issue #8).
+- Drop JSON broadcast after CRYPT/1 has been on both hosts for a while ([PEER-PROTOCOL.md](PEER-PROTOCOL.md) phase 2 / issue #8). **#8 stays HOLD** until sustained earshot (#9). Do not drop broadcast because Path A multicast already PASSed.
 - Stop Settings 4 s `fleet?probe=1` poll (PR #45) so DualLite does not time out hello while linking.
 - Range-resume on `ensure()` copies (PR #42).
 - Sustained Unison earshot (issue #9). Path A is proven; PLL hunt is not.
@@ -181,7 +181,7 @@ V1.1.11: CRYPT/1 multicast on `239.18.20.1:41880` (binary beacon + Unison CLOCK 
 
 V1.1.12: Unison follower **rides CLOCK**. Do not seek on the ~400 ms path-delay error (that restart is the hallway echo). Hold while the pipe fills, catch-up seek at most every 8 s, brief pause if slightly ahead. Turning Unison on mid-track fans the conductor’s current playback position.
 
-V1.1.13: Settings `beacon.igmp_ok` / `igmp_error` are not cleared by a successful send (#41). Advertised **libver** is the catalog ETag; BEACON flags include playing / unison (#43). Follower pause/stop only after HTTP `/api/clock` says the conductor is not playing — CLOCK silence is not pause (#47). Lab Path A (not in git): Carrillos Core Switch GS752TPP `192.168.1.10` is the VLAN 1 IGMP querier; SW2 `.11` snoops only; CRYPT hosts on `.11` g25 (DualLite) and g9 (Quad); uplink `.10` g1 ↔ `.11` g48. Do not trust Live for IGMP. JSON broadcast (issue #8) is still on. Settings still polls `/api/fleet?probe=1` every 4 s (PR #45 not merged) — DualLite can miss a 4 s hello when both Settings tabs are open.
+V1.1.13: Settings `beacon.igmp_ok` / `igmp_error` are not cleared by a successful send (#41). Advertised **libver** is the catalog ETag; BEACON flags include playing / unison (#43). Follower pause/stop only after HTTP `/api/clock` says the conductor is not playing — CLOCK silence is not pause (#47). Lab Path A: Carrillos Core Switch GS752TPP `192.168.1.10` is the VLAN 1 IGMP querier; SW2 `.11` snoops only; CRYPT hosts on `.11` g25 (DualLite) and g9 (Quad); uplink `.10` g1 ↔ `.11` g48. Peer `CRPT` PASS both ways; `igmp_ok` true; Unison `via=udp`. Group `239.18.20.1:41880` TTL 1, multicast MAC `01:00:5e:12:14:01`. **Live ≠ membership.** JSON broadcast (issue #8) is still on — drop HOLD until sustained earshot (#9). Unison earshot is **not** PASS. Ops (RFC 4541, one querier, storm-control warning, GS752TPP web-UI paths): [DEPLOY.md](DEPLOY.md). Settings still polls `/api/fleet?probe=1` every 4 s (PR #45 not merged) — DualLite can miss a 4 s hello when both Settings tabs are open. Private-link / dual-NIC is deferred (#7).
 
 ### Copy-then-play
 
@@ -262,6 +262,7 @@ The coordinator should own a **global MusicBrainz token bucket** (1/s) so worker
 - Do not merge Savant UIDs. Each chassis keeps its own `001AAE…` hostname pin.
 - The funnel app is a **new** codebase (Mac or one more small service). It is not stuffed into DualLite `server.py`.
 - Never point playback ffmpeg at `http://crypt-work-b/…`. Copy first.
+- Unison / CRYPT/1 peers share one L2 and `192.168.1.0/24` (TTL 1). Private-link / dual-NIC is deferred. IGMP: [DEPLOY.md](DEPLOY.md).
 
 ## Phases
 
