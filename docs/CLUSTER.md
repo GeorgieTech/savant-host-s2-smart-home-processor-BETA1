@@ -1,6 +1,6 @@
 # Future plan — four SHC-2000 CRYPT engines
 
-Status: **plan + first chassis**. Live DualLite mule remains **192.168.1.179**. First SHC-2000 is converted at **192.168.1.142** (same CRYPT V1.1.7 UI, empty library). Three more Quad hosts are not on the LAN yet. The library model below (shard on workers, hot cache on playback) is still the target. Two live chassis already link over the LAN; the wire they should speak is [PEER-PROTOCOL.md](PEER-PROTOCOL.md) (multicast CRYPT/1, not a second app yet).
+Status: **two live chassis + the original farm plan**. DualLite mule **192.168.1.179** and first SHC-2000 **192.168.1.142** run the same CRYPT UI (**V1.1.13**), share one catalog, and can Unison their TOSLINKs. Path A multicast (`239.18.20.1:41880`) is proven: GS752TPP core `.10` is the IGMP querier, both CRYPT hosts `igmp_ok`, peer `CRPT` PASS. Three more Quads are not on the LAN yet. The four-host farm below (shard on workers, hot cache on playback, separate funnel app) is **still the target**. What we shipped instead, first, is host-to-host CRYPT on the two boxes we have — see **Shipped so far vs the brainstorm**. The wire is [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
 Goal: three SHC-2000 hosts are **library + job workers**. A fourth SHC-2000 is the **TOSLINK playback cache** — it lists the whole fleet library, but only keeps a few files on its own eMMC while they are about to play, playing, or just played. A **separate application** (not this DualLite UI) sits in front, owns the fleet catalog, copies bytes when needed, fans research jobs out, and consumes the JSON those four hosts produce.
 
@@ -61,9 +61,92 @@ Keep them on `192.168.1.0/24` with this project’s existing “never .40 / .178
 
 | Name | IP | Chassis | Notes |
 |---|---|---|---|
-| DualLite mule | 192.168.1.179 | SHR-S2-00 DualLite | Lab original. Not one of the four. |
-| First SHC-2000 | 192.168.1.142 | SHC-S2-00 Quad | Converted. Hostname `crypt-001aae0739db0000`. Role TBD. See [HOST-142.md](HOST-142.md). |
+| DualLite mule | 192.168.1.179 | SHR-S2-00 DualLite | Lab original. UID `001AAE10E4090000` (stamp **E409**). Not one of the four. Holds most of the home copies today. |
+| First SHC-2000 | 192.168.1.142 | SHC-S2-00 Quad | Converted. Hostname `crypt-001aae0739db0000` (stamp **39DB**). Full CRYPT + TOSLINK. Fleet role (worker vs playback) still TBD. See [HOST-142.md](HOST-142.md). |
 | `crypt-play` / `crypt-work-b` / `crypt-work-c` | TBD | SHC-2000 | Not on the bench yet. |
+
+## Shipped so far vs the brainstorm
+
+This file was written as a **four-host job farm** before the second chassis was even converted. The pair on the bench took a different first path: make the two hosts we have talk, share a library, and play. The farm plan is not cancelled. It is not what is running tonight.
+
+### The brainstorm (still the target)
+
+```
+Separate funnel app  (not this DualLite UI)
+        │
+        ▼
+Playback SHC-2000 — one TOSLINK to the room, hot cache now/next/last
+        ▲
+        │  copy-then-play, job JSON
+┌───────┴────────┬────────────────┬────────────────┐
+│ Worker A      │ Worker B      │ Worker C      │
+│ shard of files│ shard of files│ shard of files│
+│ Report/essay  │ Wave/beat     │ Lyrics        │
+└───────────────┴────────────────┴────────────────┘
+```
+
+- DualLite `.179` is a **mule**, not a farm member.
+- `.142` is the first of **four** SHC-2000s. Role (playback vs worker) assigned later.
+- One listening room, **one** optical jack. Workers do not make the DAC.
+- Files **sharded**: each `name` has one owner. Playback disk is a tiny hot cache, not a second library.
+- A **new app** owns the fleet catalog, copies bytes, fans Report / Wave / Lyrics to A/B/C.
+- No NAS, no ffmpeg HTTP, no Kubernetes, no Savant clustering.
+
+### What is actually live (V1.1.8–V1.1.13)
+
+```
+Phone / laptop browser
+        │  same CRYPT UI on :80
+        ▼
+┌──────────────────────┐     CRYPT/1 multicast 239.18.20.1:41880
+│ DualLite .179        │◄──────────────────────────────────────►┌──────────────────────┐
+│ SHR-S2-00  1 GB      │     HTTP copy-then-play / Unison fan    │ Quad .142            │
+│ stamp E409           │                                         │ SHC-S2-00  2 GB      │
+│ home of ~71 tracks   │     two-way peers.json                  │ stamp 39DB           │
+│ TOSLINK zone A       │     merged Library (home_stamp)         │ TOSLINK zone B       │
+└──────────────────────┘                                         └──────────────────────┘
+```
+
+| Brainstorm | Shipped on the two hosts |
+|---|---|
+| Separate funnel app owns the catalog | **No app yet.** Each host’s Library page merges shelves itself (`GET /api/library`, `?local=1` so they do not recurse). |
+| Four SHC-2000s, DualLite not in the farm | **Two chassis:** DualLite mule `.179` + first Quad `.142`. Three Quads still missing. |
+| One playback TOSLINK; workers silent | **Two TOSLINKs.** Each jack is its own DAC. Optional **Unison** plays the same track on both, CLOCK-steered. That was not in the original picture (original said do not treat three optical jacks as one DAC — Unison is two rooms, not one merged DAC). |
+| Files sharded across three worker eMMCs | **Mostly one shelf.** Home copies live on `.179` (E409). `.142` has a smaller home set (39DB) plus hot copies when it plays. Not a three-way shard. |
+| Playback `/data/music` is now/next/last only | **Copy-then-play exists**, but we do **not** yet evict to a 3-file cache or prefetch next. Copies can stay on the Quad. |
+| `CRYPT_PEERS` later for delete fan-out | **Two-way link** in `/data/crypt/peers.json`. Delete is still **owner-only** (no proxy delete, no fleet cache drop). |
+| Discovery somehow in the app | **Settings → On the LAN.** UID-unique blades, Live vs Linked. Third host would appear as its own row. |
+| HTTP JSON between app and hosts | **CRYPT/1** binary multicast (`239.18.20.1:41880`) for beacon + Unison CLOCK at 20 Hz. JSON broadcast still on as fallback. HTTP for hello, library, media copy, Play/Pause/Seek. |
+| Report / wave / lyrics fanned to A/B/C | **Still local** on whichever host you open. No job dispatcher. |
+| Funnel UI is a new codebase | **Same CRYPT web UI** on both boxes. |
+
+Version trail of the live pair:
+
+| Tag | What landed |
+|---|---|
+| V1.1.8 | One-way shelf: `.142` lists `.179`. Play copies, then local ffmpeg. |
+| V1.1.9 | Settings discovery (UID blades, Live / Linked). |
+| V1.1.10 | Link is two-way. Merged catalog with `home_stamp`. Unison TOSLINK (HTTP clock). |
+| V1.1.11 | CRYPT/1 multicast + libver so merge is not a full JSON refetch every 8 s. |
+| V1.1.12 | Unison **rides CLOCK** instead of seeking the ~400 ms path delay (that seek was the hallway echo). |
+| V1.1.13 | Sticky `beacon.igmp_*` (#41). libver is an ETag; BEACON advertises playing/unison (#43). Unison pause/stop confirms over HTTP `/api/clock` (#47). Lab Path A: GS752TPP `.10` querier + snooping on `.10`/`.11`; peer `CRPT` PASS; `igmp_ok` true. Unison earshot still not a hold. |
+
+Hard rules that did **not** change: no AirPlay / Spotify / DLNA / NAS; no ffmpeg HTTP; stdlib only; never `.40` / `.178` / `.180`; do not `dd` DualLite eMMC onto a Quad; do not spoof Carrillos UID.
+
+### Still ahead (brainstorm not started)
+
+- Convert two more SHC-2000 workers and a dedicated playback Quad.
+- Assign `.142` a farm role (it is “full CRYPT + TOSLINK” until then).
+- Shard new uploads (least-full / hash) so `.179` is not the only archive.
+- Hot-cache eviction (now / next / last) and prefetch of queue +1.
+- Delete fan-out: owner, then drop hot copies and `/data/crypt/*` JSON everywhere.
+- Funnel app: one catalog, copy-then-play onto **one** playback jack, Report×3, Wave on owner, Lyrics on C, MusicBrainz token bucket 1/s.
+- Drop JSON broadcast after CRYPT/1 has been on both hosts for a while ([PEER-PROTOCOL.md](PEER-PROTOCOL.md) phase 2 / issue #8).
+- Stop Settings 4 s `fleet?probe=1` poll (PR #45) so DualLite does not time out hello while linking.
+- Range-resume on `ensure()` copies (PR #42).
+- Sustained Unison earshot (issue #9). Path A is proven; PLL hunt is not.
+
+Until those four chassis exist, keep shipping CRYPT on `.179` and `.142` and treat the Picture at the top as the architecture we are walking toward, not what is racked today.
 
 ## Library model — shard on workers, cache on playback
 
@@ -97,6 +180,8 @@ V1.1.10: A link is two-way (unison catalog). Each library row is stamped with th
 V1.1.11: CRYPT/1 multicast on `239.18.20.1:41880` (binary beacon + Unison CLOCK at 20 Hz). JSON broadcast stays as fallback. Library merge skips HTTP when the advertised **libver** matches. See [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
 V1.1.12: Unison follower **rides CLOCK**. Do not seek on the ~400 ms path-delay error (that restart is the hallway echo). Hold while the pipe fills, catch-up seek at most every 8 s, brief pause if slightly ahead. Turning Unison on mid-track fans the conductor’s current playback position.
+
+V1.1.13: Settings `beacon.igmp_ok` / `igmp_error` are not cleared by a successful send (#41). Advertised **libver** is the catalog ETag; BEACON flags include playing / unison (#43). Follower pause/stop only after HTTP `/api/clock` says the conductor is not playing — CLOCK silence is not pause (#47). Lab Path A (not in git): Carrillos Core Switch GS752TPP `192.168.1.10` is the VLAN 1 IGMP querier; SW2 `.11` snoops only; CRYPT hosts on `.11` g25 (DualLite) and g9 (Quad); uplink `.10` g1 ↔ `.11` g48. Do not trust Live for IGMP. JSON broadcast (issue #8) is still on. Settings still polls `/api/fleet?probe=1` every 4 s (PR #45 not merged) — DualLite can miss a 4 s hello when both Settings tabs are open.
 
 ### Copy-then-play
 
@@ -180,13 +265,13 @@ The coordinator should own a **global MusicBrainz token bucket** (1/s) so worker
 
 ## Phases
 
-### 0 — Lab mule (now)
+### 0 — Lab mule (done, then kept as a peer)
 
-CRYPT V1.1.7 on DualLite `.179`. Prove APIs: status, clock, report, lyrics, wave, upload, media GET, delete-with-cache. This box is **not** one of the four SHC-2000s.
+CRYPT on DualLite `.179` proved status, clock, report, lyrics, wave, upload, media GET, delete-with-cache. This box is **not** one of the four SHC-2000s. It is still on the LAN as the E409 shelf and a Unison TOSLINK zone.
 
 ### 1 — Convert three SHC-2000 workers
 
-First Quad is up at **192.168.1.142** (`crypt-001aae0739db0000`). Convert two more the same way (do not clone DualLite eMMC). Install CRYPT. Give each a name and a lab IP. Confirm `GET /api/status`. No TOSLINK required on workers. Seed each worker with a **distinct** shard of test files.
+First Quad is up at **192.168.1.142** (`crypt-001aae0739db0000`) with full CRYPT, not an empty worker. Convert two more the same way (do not clone DualLite eMMC). Install CRYPT. Give each a name and a lab IP. Confirm `GET /api/status`. No TOSLINK required on workers. Seed each worker with a **distinct** shard of test files.
 
 ### 2 — Convert the fourth as playback
 
@@ -239,4 +324,4 @@ Playlist or folder in → N reports out, three at a time. Persist results in the
 - Whether playback itself may run Report when idle, or never.
 - Whether the funnel app is a local Mac tool first, or another rack host later.
 
-Until those four chassis exist, keep shipping CRYPT on `.179` and treat this file as the target architecture.
+Until those four chassis exist, keep shipping CRYPT on `.179` and `.142` and treat the Picture at the top as the target architecture. The live pair is documented under **Shipped so far vs the brainstorm**.
