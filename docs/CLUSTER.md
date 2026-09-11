@@ -1,6 +1,6 @@
 # Future plan — four SHC-2000 CRYPT engines
 
-Status: **two live chassis + the original farm plan**. DualLite mule **192.168.1.179** and first SHC-2000 **192.168.1.142** run the same CRYPT UI (**V1.1.15**), share one catalog, and can Unison their TOSLINKs. Path A multicast (`239.18.20.1:41880`) is proven: GS752TPP core `.10` is the IGMP querier, both CRYPT hosts `igmp_ok`, peer `CRPT` PASS. Three more Quads are not on the LAN yet. The four-host farm below (shard on workers, hot cache on playback, separate funnel app) is **still the target**. What we shipped instead, first, is host-to-host CRYPT on the two boxes we have — see **Shipped so far vs the brainstorm**. The wire is [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
+Status: **two live chassis + the original farm plan**. DualLite mule **192.168.1.179** and first SHC-2000 **192.168.1.142** run the same CRYPT UI (**V1.1.16**), share one catalog, and can Unison their TOSLINKs. Path A multicast (`239.18.20.1:41880`) is proven: GS752TPP core `.10` is the IGMP querier, both CRYPT hosts `igmp_ok`, peer `CRPT` PASS. Three more Quads are not on the LAN yet. The four-host farm below (shard on workers, hot cache on playback, separate funnel app) is **still the target**. What we shipped instead, first, is host-to-host CRYPT on the two boxes we have — see **Shipped so far vs the brainstorm**. The wire is [PEER-PROTOCOL.md](PEER-PROTOCOL.md).
 
 Goal: three SHC-2000 hosts are **library + job workers**. A fourth SHC-2000 is the **TOSLINK playback cache** — it lists the whole fleet library, but only keeps a few files on its own eMMC while they are about to play, playing, or just played. A **separate application** (not this DualLite UI) sits in front, owns the fleet catalog, copies bytes when needed, fans research jobs out, and consumes the JSON those four hosts produce.
 
@@ -92,7 +92,7 @@ Playback SHC-2000 — one TOSLINK to the room, hot cache now/next/last
 - A **new app** owns the fleet catalog, copies bytes, fans Report / Wave / Lyrics to A/B/C.
 - No NAS, no ffmpeg HTTP, no Kubernetes, no Savant clustering.
 
-### What is actually live (V1.1.8–V1.1.15)
+### What is actually live (V1.1.8–V1.1.16)
 
 ```
 Phone / laptop browser
@@ -132,6 +132,7 @@ Version trail of the live pair:
 | V1.1.13 | Sticky `beacon.igmp_*` (#41). libver is an ETag; BEACON advertises playing/unison (#43). Unison pause/stop confirms over HTTP `/api/clock` (#47). Lab Path A: GS752TPP `.10` querier + snooping on `.10`/`.11`; peer `CRPT` PASS; `igmp_ok` true. Unison earshot still not a hold. |
 | V1.1.14 | Dark YouTube Music Playing + Library UI (#52). Protocol unchanged from 1.1.13. |
 | V1.1.15 | Library boot `tick` restored; linked merge no longer deadlocks on `APP.lock` + `?local=1`. |
+| V1.1.16 | Soft ahead-slew; no catch-seek when the follower is ahead (#56). |
 
 Hard rules that did **not** change: no AirPlay / Spotify / DLNA / NAS; no ffmpeg HTTP; stdlib only; never `.40` / `.178` / `.180`; do not `dd` DualLite eMMC onto a Quad; do not spoof Carrillos UID.
 
@@ -188,6 +189,8 @@ V1.1.13: Settings `beacon.igmp_ok` / `igmp_error` are not cleared by a successfu
 V1.1.14: Dark YouTube Music–inspired Playing + Library (#52). Same wire as 1.1.13. Unison earshot still not a hold (#56).
 
 V1.1.15: #52 dropped Library `tick()` so the catalog never fetched (empty list). Linked hosts also deadlocked: `GET /api/library` held `APP.lock` while HTTP-fetching the peer, and `?local=1` still called `refresh()`/merge. Local catalog paints first; merge timeout 6 s.
+
+V1.1.16: Lab #56 — Quad `uni_drift` −439 ms while both `clock.locked`. Catch-seek on an *ahead* error restarted paplay (~400 ms slap). Now hold 18–50 ms lead, slew ≤24 ms, catch only when *behind*. Earshot still not a hold.
 
 ### Copy-then-play
 
