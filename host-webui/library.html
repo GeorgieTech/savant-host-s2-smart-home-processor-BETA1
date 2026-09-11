@@ -187,6 +187,10 @@ function playlistTracks(pl) {
 }
 
 async function playList(list, start) {
+  if ((last.unison || {}).following) {
+    $("err").textContent = "Conductor owns Unison transport";
+    return;
+  }
   const names = (list || []).map((t) => t.name).filter(Boolean);
   if (!names.length) return;
   const name = start || names[0];
@@ -468,7 +472,14 @@ function render() {
       li.innerHTML = "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
       const play = document.createElement("button");
       play.textContent = "Play";
-      play.onclick = (e) => { e.stopPropagation(); api("/api/play", { playlist: p.id }).then(() => tick()); };
+      play.onclick = (e) => {
+        e.stopPropagation();
+        if ((last.unison || {}).following) {
+          $("err").textContent = "Conductor owns Unison transport";
+          return;
+        }
+        api("/api/play", { playlist: p.id }).then(() => tick());
+      };
       const del = document.createElement("button");
       del.textContent = "Delete";
       del.onclick = async (e) => {

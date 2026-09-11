@@ -38,7 +38,7 @@
       <div class="rack-stats" id="rack-stats"></div>
       <div class="rack" id="rack"></div>
       <div class="row">
-        <button type="button" class="primary" id="btn-scan">Scan again</button>
+        <button type="button" class="primary" id="btn-scan">Scan / Refresh LAN</button>
       </div>
       <div class="err" id="err"></div>
       <div class="okline" id="ok"></div>
@@ -48,7 +48,7 @@
         <h2>Unison TOSLINK</h2>
         <span class="badge" id="uni-badge">Off</span>
       </div>
-      <p class="hint">When this is on, Play / Pause / Seek / Next on this host also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Off means each TOSLINK is independent, still from the merged catalog.</p>
+      <p class="hint">When this is on, Play / Pause / Seek / Next on the conductor also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Next / Prev / Stop / Play-from-queue on a follower are locked so CLOCK stays on one host. Off means each TOSLINK is independent, still from the merged catalog.</p>
       <div class="row">
         <button type="button" class="unison-btn" id="uni-toggle">Unison off</button>
       </div>
@@ -239,11 +239,10 @@ function render(data) {
   else if (beacon.error) bits.push("Beacon: " + beacon.error);
   $("err").textContent = bits.join(" · ");
 }
-async function loadFleet(probe) {
+async function loadFleet() {
   if (busy) return;
   try {
-    const url = probe ? "/api/fleet?probe=1" : "/api/fleet";
-    const data = await (await fetch(url)).json();
+    const data = await (await fetch("/api/fleet")).json();
     render(data);
     return data;
   } catch (e) {
@@ -299,9 +298,9 @@ async function unlinkHost(h) {
   }
 }
 $("btn-scan").onclick = scan;
-loadFleet(true);
+loadFleet();
 loadUnison();
-setInterval(() => loadFleet(true), 4000);
+setInterval(loadFleet, 4000);
 setInterval(loadUnison, 4000);
 </script>
 </body>

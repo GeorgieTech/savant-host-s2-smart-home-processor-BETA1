@@ -107,12 +107,12 @@
         <canvas id="wover" aria-label="Track overview"></canvas>
       </div>
       <div class="transport">
-        <button class="icon" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
+        <button class="icon" id="prevbtn" type="button" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
         <button class="playbig primary" id="playbtn" onclick="toggle()">Play</button>
-        <button class="icon" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
+        <button class="icon" id="nextbtn" type="button" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
       </div>
       <div class="row center">
-        <button class="ghost" onclick="api('/api/stop')">Stop</button>
+        <button class="ghost" id="stopbtn" type="button" onclick="api('/api/stop')">Stop</button>
         <button type="button" class="unison-btn" id="unison" hidden>Unison TOSLINK</button>
       </div>
       <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100"></div>
@@ -260,6 +260,7 @@ async function toggle() {
   const p = last.player || {};
   if (p.playing) await api("/api/pause");
   else if (p.paused) await api("/api/resume");
+  else if (followingUnison()) return;
   else if (p.name) await api("/api/play", { name: p.name });
   else if ((last.count || 0) > 0) await api("/api/next");
   tick();
@@ -272,7 +273,12 @@ if (unisonBtn) {
     tick();
   };
 }
-async function playName(name) { unlockAudio(); await api("/api/play", { name }); tick(); }
+async function playName(name) {
+  if (followingUnison()) return;
+  unlockAudio();
+  await api("/api/play", { name });
+  tick();
+}
 let volUser = false;
 let volPending = null;
 let volBusy = false;
@@ -893,6 +899,21 @@ function stopViz() {
   viz.raf = 0;
 }
 
+function followingUnison() {
+  return !!(last.unison || {}).following;
+}
+function lockFollowerTransport() {
+  const lock = followingUnison();
+  const title = lock ? "Conductor owns Unison transport" : "";
+  ["prevbtn", "nextbtn", "stopbtn"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.disabled = lock;
+    if (title) el.title = title;
+    else el.removeAttribute("title");
+  });
+}
+
 function renderQueue(st) {
   const ul = $("queue");
   ul.innerHTML = "";
@@ -909,12 +930,18 @@ function renderQueue(st) {
     $("qmore").hidden = true;
     return;
   }
+  const lock = followingUnison();
   items.slice(0, 5).forEach((t, i) => {
     const li = document.createElement("li");
     li.innerHTML =
       "<span class='idx'>" + (i + 1) + "</span>" +
       "<span class='name'>" + esc(t.title || titleOf(t.name)) + "</span>";
-    li.onclick = () => playName(t.name);
+    if (lock) {
+      li.classList.add("locked");
+      li.title = "Conductor owns Unison transport";
+    } else {
+      li.onclick = () => playName(t.name);
+    }
     ul.appendChild(li);
   });
   if (total > items.length) {
@@ -937,6 +964,7 @@ async function tick() {
     viz.vol = ((st.volume == null ? 100 : st.volume) / 100);
     syncTap(p, playing);
     const u = st.unison || {};
+    lockFollowerTransport();
     const uni = $("unison");
     if (uni) {
       if (u.linked > 0) {
