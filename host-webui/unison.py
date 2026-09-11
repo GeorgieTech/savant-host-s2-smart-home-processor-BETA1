@@ -213,6 +213,7 @@ class Unison(object):
                 time.sleep(0.35)
                 continue
             if not url:
+                # Conductor only. A follower with _follow_url set must not emit CLOCK.
                 if player is not None and player.snapshot().get("playing"):
                     try:
                         self._emit_clock()
