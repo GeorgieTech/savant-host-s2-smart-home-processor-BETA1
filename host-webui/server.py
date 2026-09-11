@@ -841,15 +841,54 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(202, {"ok": True})
                 return
             if path == "/api/unison":
-                snap = UNISON.set_on(bool(body.get("on")))
-                if snap.get("on") and not snap.get("following"):
-                    p = APP.player.snapshot()
-                    if p.get("playing") and p.get("name"):
-                        UNISON.broadcast("/api/unison/follow", {
-                            "name": p.get("name"),
-                            "start": p.get("playback") or 0,
-                            "order": list(APP.order or []),
-                        })
+                action = str(body.get("action") or "").strip().lower()
+                p = APP.player.snapshot()
+                playing = bool(p.get("playing") and p.get("name"))
+
+                def _fan(urls=None):
+                    if not playing:
+                        return
+                    UNISON.broadcast("/api/unison/follow", {
+                        "name": p.get("name"),
+                        "start": p.get("playback") or 0,
+                        "order": list(APP.order or []),
+                    }, urls=urls)
+
+                def _stop_remote(url):
+                    url = (url or "").rstrip("/")
+                    if not url:
+                        return
+                    try:
+                        UNISON.post(url + "/api/stop", {"follow": True}, timeout=4)
+                    except Exception:
+                        pass
+
+                if action == "add":
+                    url = body.get("url") or body.get("ip") or ""
+                    UNISON.add_room(url)
+                    _fan([url])
+                elif action == "remove":
+                    url = UNISON.remove_room(body.get("url") or body.get("ip") or "")
+                    _stop_remote(url)
+                elif action == "leave":
+                    UNISON.unfollow()
+                    APP.stop(follow=True)
+                elif "rooms" in body:
+                    before = set(UNISON._targets())
+                    UNISON.set_rooms(body.get("rooms"))
+                    after = set(UNISON._targets())
+                    for url in after - before:
+                        _fan([url])
+                    for url in before - after:
+                        _stop_remote(url)
+                elif "on" in body:
+                    if not body.get("on"):
+                        for url in UNISON._targets():
+                            _stop_remote(url)
+                        UNISON.set_on(False)
+                    else:
+                        UNISON.set_on(True)
+                snap = UNISON.snapshot()
                 self._send(200, {"ok": True, "unison": snap})
                 return
             if path == "/api/playlists":

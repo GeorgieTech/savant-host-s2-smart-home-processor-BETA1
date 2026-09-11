@@ -18,7 +18,7 @@
   <header class="topbar">
     <div class="brand">
       <h1>CRYPT</h1>
-      <div class="sub">S2 · V1.1.16</div>
+      <div class="sub">S2 · V1.1.17</div>
     </div>
     <div class="top-end">
       <div class="hostline" id="hostline">Connecting…</div>
@@ -54,10 +54,7 @@
         </div>
       </div>
       <div class="mode-row" id="moderow" hidden>
-        <div class="mode-chip" role="group" aria-label="Solo or Unison optical">
-          <button type="button" id="mode-solo">Solo</button>
-          <button type="button" id="mode-unison">Unison</button>
-        </div>
+        <div class="mode-chip room-chips" id="roomchips" role="group" aria-label="Play to"></div>
         <span class="mode-badge" id="modebadge" hidden></span>
       </div>
       <div class="transport">
@@ -65,7 +62,7 @@
         <button class="playbig primary" id="playbtn" type="button" aria-label="Play">Play</button>
         <button class="icon" id="nextbtn" type="button" aria-label="Next">⟩⟩</button>
       </div>
-      <p class="follow-hint" id="followhint" hidden>Follow owns transport — tap Solo to leave.</p>
+      <p class="follow-hint" id="followhint" hidden>This jack is in another host’s group — tap This jack to leave.</p>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
         <div class="wave-progress hidden" id="waveprog">
@@ -289,7 +286,7 @@ function followingUnison() {
   return !!(last.unison || {}).following;
 }
 function followerLockTitle() {
-  return followingUnison() ? "Follow owns transport — tap Solo to leave." : "";
+  return followingUnison() ? "This jack is in another host’s group — tap This jack to leave." : "";
 }
 function lockFollowerTransport() {
   const lock = followingUnison();
@@ -425,10 +422,60 @@ async function setUnison(on) {
   await api("/api/unison", { on: !!on });
   tick();
 }
-const modeSolo = $("mode-solo");
-const modeUni = $("mode-unison");
-if (modeSolo) modeSolo.onclick = () => setUnison(false);
-if (modeUni) modeUni.onclick = () => setUnison(true);
+async function toggleRoom(url, on) {
+  if (followingUnison()) {
+    await api("/api/unison", { action: "leave" });
+    tick();
+    return;
+  }
+  await api("/api/unison", { action: on ? "add" : "remove", url: url });
+  tick();
+}
+function paintRooms(u) {
+  const row = $("moderow");
+  const box = $("roomchips");
+  const badge = $("modebadge");
+  if (!row || !box) return;
+  const hosts = u.linked_hosts || [];
+  if (!hosts.length && !u.following) {
+    row.hidden = true;
+    if (badge) badge.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  box.innerHTML = "";
+  const here = document.createElement("button");
+  here.type = "button";
+  here.textContent = "This jack";
+  here.className = u.following ? "" : "on";
+  here.onclick = () => {
+    if (u.following) api("/api/unison", { action: "leave" }).then(() => tick());
+    else setUnison(false);
+  };
+  box.appendChild(here);
+  hosts.forEach((h) => {
+    const url = h.url;
+    const on = (u.rooms || []).some((r) => r.url === url);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = h.stamp || "jack";
+    btn.className = on ? "on" : "";
+    btn.disabled = !!u.following;
+    btn.onclick = () => toggleRoom(url, !on);
+    box.appendChild(btn);
+  });
+  if (badge) {
+    const bits = [];
+    if (u.following) bits.push("In group " + (u.conductor_stamp || "peer"));
+    else if ((u.rooms || []).length) bits.push("Play to " + (u.rooms || []).map((r) => r.stamp).join(" + "));
+    else bits.push("This jack only");
+    if (u.via) bits.push(u.via);
+    if (u.drift_ms != null) bits.push(u.drift_ms + " ms");
+    badge.textContent = bits.join(" · ");
+    badge.hidden = false;
+    badge.className = "mode-badge" + (u.following ? " follow" : ((u.rooms || []).length ? " lock" : ""));
+  }
+}
 async function playName(name) {
   if (followingUnison()) {
     $("err").textContent = followerLockTitle();
@@ -1150,31 +1197,13 @@ async function tick() {
     syncTap(p, playing);
     const u = st.unison || {};
     lockFollowerTransport();
-    const modeRow = $("moderow");
-    const modeBadge = $("modebadge");
-    if (modeRow) {
-      if (u.linked > 0) {
-        modeRow.hidden = false;
-        if (modeSolo) modeSolo.classList.toggle("on", !u.on);
-        if (modeUni) modeUni.classList.toggle("on", !!u.on);
-        if (modeBadge) {
-          const bits = [];
-          if (!u.on) bits.push("Solo · shelf linked");
-          else if (u.following) bits.push("Follow " + (u.conductor_stamp || "peer"));
-          else bits.push("Unison optical");
-          if (u.on && u.drift_ms != null) bits.push(u.drift_ms + " ms");
-          modeBadge.textContent = bits.join(" · ");
-          modeBadge.hidden = false;
-          modeBadge.className = "mode-badge" + (u.on ? (u.following ? " follow" : " lock") : "");
-        }
-      } else {
-        modeRow.hidden = true;
-        if (modeBadge) modeBadge.hidden = true;
-      }
-    }
+    paintRooms(u);
     let line = (st.model || "SHR-S2") + " · TOSLINK";
-    if (u.on && u.linked > 0) {
-      line = u.following ? ("Follow " + (u.conductor_stamp || "peer")) : "Unison optical";
+    if (u.following) {
+      line = "In group " + (u.conductor_stamp || "peer");
+      if (u.drift_ms != null) line += " · " + u.drift_ms + " ms";
+    } else if ((u.rooms || []).length) {
+      line = "Play to " + (u.rooms || []).map((r) => r.stamp || "jack").join(" + ");
       if (u.drift_ms != null) line += " · " + u.drift_ms + " ms";
     }
     $("hostline").textContent = line;

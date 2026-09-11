@@ -244,7 +244,7 @@ function emptyState(title, detail) {
 }
 async function playRemote(row, requestFn) {
   if (followingUnison()) {
-    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
+    $("err").textContent = "This jack is in another host’s group — leave the group on Playing.";
     return;
   }
   if (jobBusy) return;
@@ -285,7 +285,7 @@ async function playRemote(row, requestFn) {
 }
 async function playList(list, start) {
   if (followingUnison()) {
-    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
+    $("err").textContent = "This jack is in another host’s group — leave the group on Playing.";
     return;
   }
   const names = (list || []).map((t) => t.name).filter(Boolean);

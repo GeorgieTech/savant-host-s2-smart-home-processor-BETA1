@@ -45,13 +45,11 @@
     </section>
     <section class="card">
       <div class="section-head">
-        <h2>Unison TOSLINK</h2>
-        <span class="badge" id="uni-badge">Off</span>
+        <h2>Play to</h2>
+        <span class="badge" id="uni-badge">This jack</span>
       </div>
-      <p class="hint">When this is on, Play / Pause / Seek / Next on this host also run on every linked chassis. Each box copies the track, then plays it on its own optical jack. Time Clock keeps the heard positions together. Off means each TOSLINK is independent, still from the merged catalog.</p>
-      <div class="row">
-        <button type="button" class="unison-btn" id="uni-toggle">Unison off</button>
-      </div>
+      <p class="hint">Play stays on this TOSLINK until you add a linked jack. Adding a host copies the track there, then CLOCK-steers. Linked shelves are not overwritten just because they are linked.</p>
+      <div class="mode-chip room-chips" id="uni-rooms" role="group" aria-label="Play to"></div>
       <p class="meta tight" id="uni-meta"></p>
     </section>
   </main>
@@ -174,7 +172,7 @@ function blade(h) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "primary";
-      btn.textContent = "Link for unison";
+      btn.textContent = "Link shelf";
       btn.onclick = () => linkHost(h);
       actions.appendChild(btn);
     }
@@ -186,12 +184,44 @@ async function loadUnison() {
   try {
     const data = await (await fetch("/api/unison")).json();
     const u = data.unison || {};
-    const btn = $("uni-toggle");
     const badge = $("uni-badge");
-    btn.classList.toggle("on", !!u.on);
-    btn.textContent = u.on ? "Unison on" : "Unison off";
-    badge.textContent = u.on ? (u.following ? "Following" : "On") : "Off";
-    badge.className = "badge " + (u.on ? "live" : "");
+    const box = $("uni-rooms");
+    const grouped = (u.rooms || []).length > 0;
+    badge.textContent = u.following ? ("In group " + (u.conductor_stamp || "peer")) : (grouped ? "Grouped" : "This jack");
+    badge.className = "badge " + ((grouped || u.following) ? "live" : "");
+    if (box) {
+      box.innerHTML = "";
+      const here = document.createElement("button");
+      here.type = "button";
+      here.textContent = "This jack";
+      here.className = u.following ? "" : "on";
+      here.onclick = async () => {
+        await fetch("/api/unison", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(u.following ? { action: "leave" } : { on: false }),
+        });
+        loadUnison();
+      };
+      box.appendChild(here);
+      (u.linked_hosts || []).forEach((h) => {
+        const on = (u.rooms || []).some((r) => r.url === h.url);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = h.stamp || "jack";
+        btn.className = on ? "on" : "";
+        btn.disabled = !!u.following;
+        btn.onclick = async () => {
+          await fetch("/api/unison", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: on ? "remove" : "add", url: h.url }),
+          });
+          loadUnison();
+        };
+        box.appendChild(btn);
+      });
+    }
     const bits = [];
     if (u.linked) bits.push(u.linked + " linked");
     if (u.following) bits.push("follow " + (u.conductor_stamp || "peer"));
@@ -200,15 +230,6 @@ async function loadUnison() {
     $("uni-meta").textContent = bits.join(" · ");
   } catch (e) {}
 }
-$("uni-toggle").onclick = async () => {
-  const cur = ($("uni-toggle").classList.contains("on"));
-  await fetch("/api/unison", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ on: !cur }),
-  });
-  loadUnison();
-};
 
 function render(data) {
   const hosts = data.hosts || [];

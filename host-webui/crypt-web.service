@@ -1,5 +1,5 @@
 [Unit]
-Description=CRYPT S2 Smart Home Processor V1.1.16
+Description=CRYPT S2 Smart Home Processor V1.1.17
 After=network-online.target crypt-pulse.service crypt-hostname.service
 Wants=network-online.target crypt-pulse.service crypt-hostname.service
 

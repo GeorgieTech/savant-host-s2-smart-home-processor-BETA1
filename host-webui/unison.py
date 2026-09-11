@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Unison TOSLINK: optional synced play across linked CRYPT hosts.
+"""Grouped TOSLINK: play this jack, then add linked hosts (Sonos-style).
 
-Each chassis copies the track, then plays it on its own optical jack.
-The follower steers its Time Clock toward the conductor's heard clock.
-No NAS, no ffmpeg HTTP. Python 3.8 stdlib only.
+Default is local-only. Linked shelves are not overwritten until you add
+them to the play-to group. Each added chassis copies the track, then
+plays it on its own optical jack and rides CLOCK. No NAS, no ffmpeg HTTP.
+Python 3.8 stdlib only.
 """
 from __future__ import print_function
 
@@ -19,18 +20,29 @@ import crypt_wire
 SYNC_FILE = os.environ.get("CRYPT_SYNC", "/data/crypt/sync.json")
 
 
-def _load_on(path):
+def _load_rooms(path):
+    """Old {on: true} without rooms means local-only — do not hijack shelves."""
     try:
         with open(path, "r") as fh:
             raw = json.load(fh)
-        if isinstance(raw, dict):
-            return bool(raw.get("on"))
+        if not isinstance(raw, dict):
+            return []
+        rooms = raw.get("rooms")
+        if not isinstance(rooms, list):
+            return []
+        out = []
+        seen = set()
+        for item in rooms:
+            url = _clean_url(item if not isinstance(item, dict) else (item.get("url") or ""))
+            if url and url not in seen:
+                seen.add(url)
+                out.append(url)
+        return out
     except (OSError, ValueError, TypeError):
-        pass
-    return False
+        return []
 
 
-def _save_on(path, on):
+def _save_rooms(path, rooms):
     folder = os.path.dirname(path)
     if folder:
         try:
@@ -38,9 +50,10 @@ def _save_on(path, on):
         except OSError:
             return
     tmp = path + ".tmp"
+    payload = {"rooms": list(rooms or []), "on": bool(rooms)}
     try:
         with open(tmp, "w") as fh:
-            json.dump({"on": bool(on)}, fh)
+            json.dump(payload, fh)
         os.replace(tmp, path)
     except OSError:
         try:
@@ -56,7 +69,8 @@ class Unison(object):
         self.get = get or _http_json
         self.player = None
         self.lock = threading.Lock()
-        self._on = _load_on(self.path)
+        self._rooms = _load_rooms(self.path)
+        self._on = bool(self._rooms)
         self._follow_url = ""
         self._follow_uid = ""
         self._drift_ms = None
@@ -70,42 +84,101 @@ class Unison(object):
         t.start()
 
     def snapshot(self):
-        linked = len((PEERS.config().get("shelves") or []))
+        shelves = PEERS.config().get("shelves") or []
+        linked_hosts = []
+        for shelf in shelves:
+            url = _clean_url(shelf.get("url") or "")
+            if not url:
+                continue
+            uid = shelf.get("uid") or ""
+            linked_hosts.append({
+                "url": url,
+                "uid": uid,
+                "id": shelf.get("id") or "",
+                "stamp": stamp(uid or shelf.get("id") or url),
+            })
         with self.lock:
             following = bool(self._follow_url)
+            rooms = list(self._rooms)
             clock_age = time.time() - self._clock_at if self._clock_at else 999
             via = ""
             if following:
-                # UDP CLOCK is the hot path. HTTP /api/clock is the >250 ms fallback.
                 via = "udp" if clock_age <= 0.25 else "http-clock"
-            return {
-                "on": bool(self._on),
-                "linked": linked,
-                "following": following,
-                "conductor": self._follow_uid,
-                "conductor_stamp": stamp(self._follow_uid) if self._follow_uid else "",
-                "drift_ms": self._drift_ms,
-                "via": via,
-            }
+            grouped = bool(rooms)
+        room_rows = [h for h in linked_hosts if h.get("url") in rooms]
+        extra = [u for u in rooms if u not in [h.get("url") for h in room_rows]]
+        for url in extra:
+            room_rows.append({"url": url, "uid": "", "id": "", "stamp": stamp(url)})
+        return {
+            "on": grouped or following,
+            "grouped": grouped,
+            "rooms": room_rows,
+            "linked_hosts": linked_hosts,
+            "linked": len(linked_hosts),
+            "following": following,
+            "conductor": self._follow_uid,
+            "conductor_stamp": stamp(self._follow_uid) if self._follow_uid else "",
+            "drift_ms": self._drift_ms,
+            "via": via,
+        }
 
     def set_on(self, on):
-        on = bool(on)
-        with self.lock:
-            self._on = on
-            if not on:
+        """Legacy. on=false clears the play-to group. on=true does not add shelves."""
+        if not on:
+            dropped = self.set_rooms([])
+            with self.lock:
                 self._follow_url = ""
                 self._follow_uid = ""
                 self._drift_ms = None
-        _save_on(self.path, on)
+            return self.snapshot()
+        with self.lock:
+            self._on = bool(self._rooms)
         return self.snapshot()
+
+    def set_rooms(self, urls):
+        seen = set()
+        rooms = []
+        for item in urls or []:
+            url = _clean_url(item if not isinstance(item, dict) else (item.get("url") or ""))
+            if url and url not in seen:
+                seen.add(url)
+                rooms.append(url)
+        with self.lock:
+            self._rooms = rooms
+            self._on = bool(rooms)
+        _save_rooms(self.path, rooms)
+        return rooms
+
+    def add_room(self, url):
+        url = _clean_url(url)
+        if not url:
+            return False
+        with self.lock:
+            if url in self._rooms:
+                rooms = list(self._rooms)
+            else:
+                rooms = list(self._rooms) + [url]
+                self._rooms = rooms
+                self._on = True
+        _save_rooms(self.path, rooms)
+        return True
+
+    def remove_room(self, url):
+        url = _clean_url(url)
+        with self.lock:
+            rooms = [u for u in self._rooms if u != url]
+            self._rooms = rooms
+            self._on = bool(rooms)
+        _save_rooms(self.path, rooms)
+        return url
 
     def follow(self, url, uid=""):
         url = _clean_url(url)
         with self.lock:
-            if not self._on:
-                return
             self._follow_url = url
             self._follow_uid = str(uid or "")
+            if url:
+                self._on = True
 
     def unfollow(self):
         with self.lock:
@@ -113,32 +186,32 @@ class Unison(object):
             self._follow_uid = ""
             self._drift_ms = None
 
-    def _targets(self):
+    def _targets(self, urls=None):
         me = identity()
         mine = set(filter(None, [me.get("ip"), me.get("url"), urlparse_host(me.get("url"))]))
+        src = urls if urls is not None else self._rooms
         out = []
-        for shelf in PEERS.config().get("shelves") or []:
-            url = shelf.get("url") or ""
+        for item in src or []:
+            url = _clean_url(item if not isinstance(item, dict) else (item.get("url") or ""))
             host = urlparse_host(url)
             if not url or host in mine or url in mine:
                 continue
-            out.append(url)
+            if url not in out:
+                out.append(url)
         return out
 
-    def broadcast(self, path, body):
-        if not self._on:
-            return
+    def broadcast(self, path, body, urls=None):
         payload = dict(body or {})
         payload["follow"] = True
         me = identity()
         payload["conductor"] = me.get("url") or (("http://%s" % me["ip"]) if me.get("ip") else "")
         payload["conductor_uid"] = me.get("uid") or ""
-        urls = list(self._targets())
-        if not urls:
+        targets = list(self._targets(urls))
+        if not targets:
             return
 
         def run():
-            for url in urls:
+            for url in targets:
                 try:
                     self.post(url + path, payload, timeout=4)
                 except Exception:
@@ -155,7 +228,7 @@ class Unison(object):
         if uid and uid == (me.get("uid") or ""):
             return
         with self.lock:
-            if not self._on or not self._follow_url:
+            if not self._follow_url:
                 return
             if self._follow_uid and uid and uid != self._follow_uid:
                 return
@@ -206,14 +279,11 @@ class Unison(object):
         while self._alive:
             with self.lock:
                 url = self._follow_url
-                on = self._on
+                rooms = list(self._rooms)
                 player = self.player
                 clock_age = time.time() - self._clock_at if self._clock_at else 999
-            if not on:
-                time.sleep(0.35)
-                continue
             if not url:
-                if player is not None and player.snapshot().get("playing"):
+                if rooms and player is not None and player.snapshot().get("playing"):
                     try:
                         self._emit_clock()
                     except Exception:
@@ -234,7 +304,7 @@ class Unison(object):
         with self.lock:
             url = self._follow_url
             on = self._on
-        if not on or not url:
+        if not url:
             return
         try:
             data = self.get(url + "/api/clock", timeout=2)

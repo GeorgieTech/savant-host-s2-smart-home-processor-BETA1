@@ -1,6 +1,6 @@
 # CRYPT/1 — host-to-host protocol (deploy this)
 
-Status: **V1.1.16** soft-slews a Unison follower that is slightly ahead (issue #56) and never catch-seeks an ahead error. V1.1.15 paints Library again (boot `tick`) and does not hold the app lock while merging a linked shelf. V1.1.14 was the dark Playing + Library UI (#52) on top of V1.1.13 protocol. CRYPT/1 wire is still V1.1.11. Settings `beacon.igmp_ok` / `igmp_error` stay sticky. libver is the catalog ETag. BEACON carries playing/unison. Unison pause/stop confirms over HTTP `/api/clock`. Unison lock is still V1.1.12; earshot is not a hold. Install on **both** live hosts in the same session.
+Status: **V1.1.17** is Sonos-style play-to groups: this jack only until you add a linked host. Copy-then-play + CLOCK, no ffmpeg HTTP. V1.1.16 soft-slews a follower that is slightly ahead (issue #56) and never catch-seeks an ahead error. V1.1.15 paints Library again (boot `tick`) and does not hold the app lock while merging a linked shelf. V1.1.14 was the dark Playing + Library UI (#52) on top of V1.1.13 protocol. CRYPT/1 wire is still V1.1.11. Settings `beacon.igmp_ok` / `igmp_error` stay sticky. libver is the catalog ETag. BEACON carries playing/unison. Unison pause/stop confirms over HTTP `/api/clock`. Unison lock is still V1.1.12; earshot is not a hold. Install on **both** live hosts in the same session.
 
 Targets: **192.168.1.179** (DualLite mule, UID `001AAE10E4090000`) and **192.168.1.142** (SHC-2000 Quad, UID `001AAE0739DB0000`). Never **.40 / .178 / .180**.
 

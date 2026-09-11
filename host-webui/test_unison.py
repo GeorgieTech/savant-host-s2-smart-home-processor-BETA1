@@ -2,6 +2,7 @@
 """Unison follower HTTP-clock fallback. Stdlib only — no paplay, no LAN."""
 import os
 import tempfile
+import time
 import unittest
 
 import unison
@@ -125,6 +126,69 @@ class HttpClockFallbackTests(unittest.TestCase):
         self.assertEqual(self.player.stop_calls, 0)
         self.assertTrue(self.player.snapshot()["playing"])
         self.assertEqual(self.gets, [])
+
+
+class GroupPlayTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.mkdtemp(prefix="crypt-group-")
+        self.path = os.path.join(self.folder, "sync.json")
+        self.posts = []
+        self.u = unison.Unison(path=self.path, get=lambda *a, **k: {}, post=self._post)
+        self.u._alive = False
+        if self.u._thread is not None:
+            self.u._thread.join(timeout=2)
+
+    def tearDown(self):
+        self.u._alive = False
+        import shutil
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def _post(self, url, data=None, timeout=4):
+        self.posts.append((url, data, timeout))
+        return {"ok": True}
+
+    def test_old_on_true_does_not_target_shelves(self):
+        with open(self.path, "w") as fh:
+            fh.write('{"on": true}')
+        u = unison.Unison(path=self.path, get=lambda *a, **k: {}, post=self._post)
+        u._alive = False
+        if u._thread is not None:
+            u._thread.join(timeout=2)
+        self.assertEqual(u._targets(), [])
+        self.assertFalse(u.snapshot()["grouped"])
+
+    def test_add_room_is_the_only_target(self):
+        self.u.add_room("http://192.168.1.142")
+        self.assertEqual(self.u._targets(), ["http://192.168.1.142"])
+        snap = self.u.snapshot()
+        self.assertTrue(snap["grouped"])
+        self.assertEqual(len(snap["rooms"]), 1)
+
+    def test_broadcast_only_hits_group(self):
+        self.u.add_room("http://192.168.1.142")
+        self.u.broadcast("/api/unison/follow", {"name": "Glow.flac"})
+        time.sleep(0.05)
+        urls = [p[0] for p in self.posts]
+        self.assertEqual(urls, ["http://192.168.1.142/api/unison/follow"])
+        self.posts[:] = []
+        self.u.set_rooms([])
+        self.u.broadcast("/api/unison/follow", {"name": "Glow.flac"})
+        time.sleep(0.05)
+        self.assertEqual(self.posts, [])
+
+    def test_follow_works_when_local_group_empty(self):
+        """Conductor can add this jack even if Unison/group was off here."""
+        self.assertEqual(self.u._targets(), [])
+        self.u.follow("http://192.168.1.179", "001AAE10E4090000")
+        snap = self.u.snapshot()
+        self.assertTrue(snap["following"])
+        self.assertEqual(snap["conductor_stamp"], "E409")
+
+    def test_set_on_false_clears_rooms(self):
+        self.u.add_room("http://192.168.1.142")
+        self.u.set_on(False)
+        self.assertEqual(self.u._targets(), [])
+        self.assertFalse(self.u.snapshot()["grouped"])
 
 
 if __name__ == "__main__":
