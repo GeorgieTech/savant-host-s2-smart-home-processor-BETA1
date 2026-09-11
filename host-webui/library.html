@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07060a">
+<meta name="theme-color" content="#030303">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CRYPT">
@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/crypt.css">
 </head>
-<body>
+<body class="library-page">
 <div class="app">
   <header class="topbar">
     <div class="brand">
@@ -37,25 +37,29 @@
       <div class="job-detail" id="job-detail"></div>
       <div class="job-stay" id="job-stay">Do not refresh or leave this page until this finishes.</div>
     </div>
-    <section class="card">
-      <h2>Upload</h2>
-      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. After a link, both hosts show the same catalog. Each row is stamped with the chassis that holds the file. Play copies here, then this TOSLINK.</p>
+    <section class="card lib-upload">
+      <div class="section-head">
+        <h2>Add music</h2>
+      </div>
+      <p class="hint">MP3, FLAC, Opus, OGG, WAV, M4A, or AAC. Files stay on this chassis.</p>
       <div class="drop" id="drop">
-        Drop files here, or
-        <label class="filebtn">Choose<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
+        <div class="drop-title">Drop files here</div>
+        <div class="drop-sub">or choose from this phone</div>
+        <label class="filebtn">Choose files<input type="file" id="file" accept="audio/*,.mp3,.flac,.opus,.ogg,.wav,.m4a,.aac" multiple hidden></label>
       </div>
     </section>
-    <section class="card">
+    <section class="card lib-catalog">
       <div class="section-head">
-        <h2>Library</h2>
+        <h2>Catalog</h2>
         <div class="lib-head-actions">
           <span class="meta tight" id="disk"></span>
           <button type="button" class="ghost" id="btn-manage">Manage</button>
         </div>
       </div>
+      <p class="lib-lead" id="lib-lead">Tap a track to play.</p>
       <p class="hint" id="shelf-hint" hidden></p>
       <div class="manage-bar hidden" id="manage-bar">
-        <p class="hint" id="manage-hint">Select tracks to delete, or edit artist, album, and genre.</p>
+        <p class="hint" id="manage-hint">Select tracks on this host to delete or tag. Remote rows stay read-only.</p>
         <div class="row">
           <button type="button" id="sel-all">Select all</button>
           <button type="button" class="ghost" id="sel-none">Clear</button>
@@ -78,7 +82,7 @@
         <button type="button" data-view="tracks">Tracks</button>
         <button type="button" data-view="playlists">Playlists</button>
       </div>
-      <input class="search" id="filter" type="search" placeholder="Search this view" autocomplete="off">
+      <input class="search" id="filter" type="search" placeholder="Search artists, albums, or tracks" autocomplete="off">
       <nav class="crumbs" id="crumbs"></nav>
       <div class="row" id="actions" hidden></div>
       <ul class="tracks" id="list"></ul>
@@ -135,6 +139,24 @@ function titleOf(t) {
   if (t && t.title) return t.title;
   return String((t && t.name) || t || "").replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
 }
+function hashName(s) {
+  let h = 2166136261;
+  const t = String(s || "crypt");
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 1;
+}
+function coverHTML(seed, letters, round) {
+  const h = hashName(seed);
+  const h1 = h % 360;
+  const h2 = (h >> 9) % 360;
+  const l1 = 11 + (h % 7);
+  const l2 = 5 + ((h >> 4) % 5);
+  const init = esc(String(letters || seed || "?").replace(/^the\s+/i, "").trim().slice(0, 2).toUpperCase() || "?");
+  return "<span class='cover" + (round ? " round" : "") + "' style='background:linear-gradient(145deg,hsl(" + h1 + ",40%," + l1 + "%),hsl(" + h2 + ",36%," + l2 + "%))'>" + init + "</span>";
+}
 function q() { return ($("filter").value || "").trim().toLowerCase(); }
 function hit(t) {
   const s = q();
@@ -186,14 +208,91 @@ function playlistTracks(pl) {
   return (pl.tracks || []).map((n) => by[n]).filter(Boolean);
 }
 
+function isRemote(t) {
+  if (!t) return false;
+  if (t.local === false) return true;
+  if (t.here === false && t.local !== true) return true;
+  return false;
+}
+function copyStamp(t) {
+  return (t && (t.home_stamp || t.owner)) || "shelf";
+}
+function isLocalRow(t) {
+  if (!t) return false;
+  if (isRemote(t)) return false;
+  if (t.local === false) return false;
+  if (t.here === false || t.home === false) return false;
+  return true;
+}
+function ownedSelected() {
+  return selectedNames().filter((n) => isLocalRow((last.tracks || []).filter((t) => t.name === n)[0]));
+}
+function syncManageActions() {
+  const n = ownedSelected().length;
+  const busy = !!jobBusy;
+  const del = $("del-sel");
+  const apply = $("bulk-apply");
+  if (del) del.disabled = busy || !n;
+  if (apply) apply.disabled = busy || !n;
+}
+function emptyState(title, detail) {
+  const li = document.createElement("li");
+  li.className = "empty empty-state";
+  li.innerHTML = "<span class='empty-title'>" + esc(title) + "</span>" +
+    (detail ? "<span class='empty-detail'>" + esc(detail) + "</span>" : "");
+  return li;
+}
+async function playRemote(row, requestFn) {
+  if (followingUnison()) {
+    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
+    return;
+  }
+  if (jobBusy) return;
+  const remote = isRemote(row);
+  if (remote) {
+    startJob("Copying", "Copying from " + copyStamp(row) + "…");
+    $("job-fill").classList.add("indeterminate");
+    const started = Date.now();
+    const pulse = setInterval(() => {
+      if (!jobBusy) return;
+      const sec = (Date.now() - started) / 1000;
+      paintJob(Math.min(88, 8 + sec * 10), "Copying", $("job-detail").textContent, "Copy-then-play — stay on this page.", "");
+      $("job-fill").classList.add("indeterminate");
+    }, 400);
+    try {
+      const res = await requestFn();
+      clearInterval(pulse);
+      $("job-fill").classList.remove("indeterminate");
+      if (res && res.ok === false) {
+        finishJob(false, "Failed", res.error || "could not copy from shelf");
+        $("err").textContent = res.error || "could not copy from shelf";
+      } else {
+        finishJob(true, "Ready", row ? (row.title || titleOf(row)) : "Playing from this host");
+        $("err").textContent = "";
+      }
+    } catch (err) {
+      clearInterval(pulse);
+      $("job-fill").classList.remove("indeterminate");
+      finishJob(false, "Failed", "Host is not answering");
+      $("err").textContent = "Host is not answering";
+    }
+    tick(true);
+    return;
+  }
+  const res = await requestFn();
+  if (res && res.ok === false) $("err").textContent = res.error || "";
+  tick();
+}
 async function playList(list, start) {
+  if (followingUnison()) {
+    $("err").textContent = "Follow owns transport — tap Solo on Playing to leave.";
+    return;
+  }
   const names = (list || []).map((t) => t.name).filter(Boolean);
   if (!names.length) return;
   const name = start || names[0];
   const row = (list || []).filter((t) => t.name === name)[0];
-  if (row && row.local === false) $("err").textContent = "Copying from shelf…";
-  await api("/api/play", { name: name, order: names });
-  tick();
+  await playRemote(row, () => api("/api/play", { name: name, order: names }));
 }
 async function delName(name, ev) {
   ev.stopPropagation();
@@ -245,7 +344,13 @@ document.querySelectorAll("#toggle [data-view]").forEach((btn) => {
     artist = "";
     album = "";
     playlistId = "";
-    $("filter").placeholder = view === "playlists" ? "Search playlists" : "Search this view";
+    $("filter").placeholder = view === "playlists"
+      ? "Search playlists"
+      : view === "albums"
+        ? "Search albums"
+        : view === "tracks"
+          ? "Search tracks"
+          : "Search artists, albums, or tracks";
     render();
   };
 });
@@ -331,21 +436,28 @@ function setDraft(name, field, value) {
 }
 function rowManage(t) {
   const li = document.createElement("li");
-  li.className = "manage-row" + (selected[t.name] ? " picked" : "");
+  const local = isLocalRow(t);
+  li.className = "manage-row" + (selected[t.name] ? " picked" : "") + (local ? "" : " away");
+  if (!local) li.setAttribute("aria-readonly", "true");
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.checked = !!selected[t.name];
-  box.setAttribute("aria-label", "Select " + titleOf(t));
+  box.checked = !!(local && selected[t.name]);
+  box.disabled = !local;
+  box.setAttribute("aria-label", local ? ("Select " + titleOf(t)) : (titleOf(t) + " is on another host"));
   box.onclick = (e) => e.stopPropagation();
   box.onchange = () => {
+    if (!local) return;
     if (box.checked) selected[t.name] = true;
     else delete selected[t.name];
     li.classList.toggle("picked", box.checked);
-    $("manage-hint").textContent = selectedNames().length + " selected";
+    $("manage-hint").textContent = ownedSelected().length + " selected";
+    syncManageActions();
   };
   const grow = document.createElement("div");
   grow.className = "grow";
-  grow.innerHTML = "<div class='name'>" + esc(titleOf(t)) + "</div>";
+  const chip = t.home_stamp ? ("<span class='home-chip " + (t.here ? "here" : "away") + "'>" + esc(t.home_stamp) + "</span>") : "";
+  grow.innerHTML = "<div class='name'>" + chip + esc(titleOf(t)) + "</div>" +
+    (local ? "" : "<div class='sub'>On another host — read only</div>");
   const grid = document.createElement("div");
   grid.className = "edit-grid";
   const cur = Object.assign({ artist: t.artist || "", album: t.album || "", genre: t.genre || "" }, draft[t.name] || {});
@@ -354,51 +466,93 @@ function rowManage(t) {
     inp.value = cur[field] || "";
     inp.placeholder = field[0].toUpperCase() + field.slice(1);
     inp.autocomplete = "off";
+    inp.readOnly = !local;
+    inp.disabled = !local;
     if (field === "genre") inp.setAttribute("list", "genre-list");
     inp.onclick = (e) => e.stopPropagation();
-    inp.oninput = () => setDraft(t.name, field, inp.value);
+    inp.oninput = () => { if (local) setDraft(t.name, field, inp.value); };
     grid.appendChild(inp);
   });
   grow.appendChild(grid);
   li.appendChild(box);
   li.appendChild(grow);
   li.onclick = () => {
+    if (!local) return;
     box.checked = !box.checked;
     box.onchange();
   };
   return li;
 }
+function rowOverflow(items) {
+  const wrap = document.createElement("div");
+  wrap.className = "row-more";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ghost more-btn";
+  btn.setAttribute("aria-label", "More");
+  btn.textContent = "⋯";
+  const menu = document.createElement("div");
+  menu.className = "row-menu hidden";
+  items.forEach((item) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = item.label;
+    b.onclick = (e) => {
+      e.stopPropagation();
+      menu.classList.add("hidden");
+      item.run(e);
+    };
+    menu.appendChild(b);
+  });
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".row-menu").forEach((el) => {
+      if (el !== menu) el.classList.add("hidden");
+    });
+    menu.classList.toggle("hidden");
+  };
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+  return wrap;
+}
 function rowTrack(t, opts) {
   const li = document.createElement("li");
+  const remote = isRemote(t);
   if (t.name === playingName()) li.className = "on";
+  if (remote) li.classList.add("away");
   const bits = [t.artist, t.album].filter(Boolean);
-  let where = "";
-  if (t.home_stamp) where = t.here ? ("here · " + t.home_stamp) : ("on " + t.home_stamp);
-  else if (t.local === false) where = "on shelf";
-  if (where) bits.push(where);
   const sub = bits.join(" · ");
   const chip = t.home_stamp ? ("<span class='home-chip " + (t.here ? "here" : "away") + "'>" + esc(t.home_stamp) + "</span>") : "";
-  li.innerHTML = "<div class='grow'><div class='name'>" + chip + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
+  li.innerHTML = coverHTML(t.name || titleOf(t), titleOf(t)) +
+    "<div class='grow'><div class='name'>" + chip + esc(titleOf(t)) + "</div><div class='sub'>" + esc(sub) + "</div></div>";
+  const extra = [];
   if (!(opts && opts.noAdd)) {
-    const add = document.createElement("button");
-    add.textContent = "Add";
-    add.onclick = (e) => openPicker(t.name, e);
-    li.appendChild(add);
+    extra.push({ label: "Add to playlist", run: (e) => openPicker(t.name, e) });
   }
   if (opts && opts.remove) {
-    const rm = document.createElement("button");
-    rm.textContent = "Remove";
-    rm.onclick = (e) => opts.remove(t.name, e);
-    li.appendChild(rm);
-  } else {
-    if (t.here !== false && t.home !== false && t.local !== false) {
-      const del = document.createElement("button");
-      del.textContent = "Delete";
-      del.onclick = (e) => delName(t.name, e);
-      li.appendChild(del);
-    }
+    extra.push({ label: "Remove", run: (e) => opts.remove(t.name, e) });
   }
-  li.onclick = () => playList(opts && opts.order ? opts.order : viewTracks(), t.name);
+  if (extra.length) li.appendChild(rowOverflow(extra));
+  let press = 0;
+  let held = false;
+  li.addEventListener("pointerdown", (e) => {
+    if (e.button && e.button !== 0) return;
+    if (e.target.closest(".row-more")) return;
+    held = false;
+    press = setTimeout(() => {
+      press = 0;
+      held = true;
+      if (!(opts && opts.noAdd)) openPicker(t.name, e);
+    }, 520);
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => {
+    li.addEventListener(ev, () => { if (press) { clearTimeout(press); press = 0; } });
+  });
+  li.onclick = (e) => {
+    if (e.target.closest(".row-more")) return;
+    if (held) { held = false; return; }
+    playList(opts && opts.order ? opts.order : viewTracks(), t.name);
+  };
   return li;
 }
 
@@ -410,14 +564,20 @@ function render() {
   const ul = $("list");
   const actions = $("actions");
   ul.innerHTML = "";
+  ul.className = "tracks browse-list";
   actions.innerHTML = "";
   actions.hidden = true;
   const now = playingName();
   if (manage) {
+    ul.className = "tracks";
     const list = viewTracks();
     list.forEach((t) => ul.appendChild(rowManage(t)));
-    $("manage-hint").textContent = selectedNames().length + " selected · " + list.length + " in this view";
-    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No tracks in this view</span></li>";
+    const localN = list.filter(isLocalRow).length;
+    const awayN = list.length - localN;
+    $("manage-hint").textContent = ownedSelected().length + " selected · " + localN + " on this host" +
+      (awayN ? (" · " + awayN + " remote read-only") : "");
+    syncManageActions();
+    if (!list.length) ul.appendChild(emptyState("No tracks in this view", "Clear search, or leave Manage to browse artists."));
     return;
   }
 
@@ -434,20 +594,32 @@ function render() {
         ul.appendChild(h);
       }
       const li = document.createElement("li");
-      li.innerHTML = "<span class='name'>" + esc(a.name) + "</span><span class='size'>" + a.count + "</span>";
+      li.innerHTML = coverHTML(a.name, a.name, true) +
+        "<span class='name'>" + esc(a.name) + "</span><span class='size'>" + a.count + "</span>";
       li.onclick = () => { artist = a.name; album = ""; render(); };
       ul.appendChild(li);
     });
-    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No artists match</span></li>";
+    if (!list.length) {
+      ul.appendChild(tracks().length
+        ? emptyState("No artists match", "Try a different search.")
+        : emptyState("No music yet", "Drop files above, or wait for a linked shelf to share its catalog."));
+    }
   } else if ((view === "artists" && artist && !album) || (view === "albums" && !album)) {
     const list = albums(view === "artists" ? artist : "");
+    ul.className = "tracks album-grid";
     list.forEach((a) => {
       const li = document.createElement("li");
-      li.innerHTML = "<div class='grow'><div class='name'>" + esc(a.album) + "</div><div class='sub'>" + esc(a.artist) + "</div></div><span class='size'>" + a.count + "</span>";
+      li.innerHTML = coverHTML((a.artist || "") + a.album, a.album) +
+        "<div class='name'>" + esc(a.album) + "</div>" +
+        "<div class='sub'>" + esc(a.artist) + " · " + a.count + "</div>";
       li.onclick = () => { artist = a.artist; album = a.album; render(); };
       ul.appendChild(li);
     });
-    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No albums match</span></li>";
+    if (!list.length) {
+      ul.appendChild(tracks().length
+        ? emptyState("No albums match", "Try a different search or artist.")
+        : emptyState("No albums yet", "Drop files above to build the catalog."));
+    }
   } else if (view === "playlists" && !playlistId) {
     actions.hidden = false;
     const mk = document.createElement("button");
@@ -465,25 +637,34 @@ function render() {
     const s = q();
     playlists().filter((p) => !s || p.name.toLowerCase().indexOf(s) >= 0).forEach((p) => {
       const li = document.createElement("li");
-      li.innerHTML = "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
-      const play = document.createElement("button");
-      play.textContent = "Play";
-      play.onclick = (e) => { e.stopPropagation(); api("/api/play", { playlist: p.id }).then(() => tick()); };
-      const del = document.createElement("button");
-      del.textContent = "Delete";
-      del.onclick = async (e) => {
-        e.stopPropagation();
-        if (!confirm("Delete playlist “" + p.name + "”?")) return;
-        const st = await api("/api/playlists", { action: "delete", id: p.id });
-        last.playlists = st.playlists || [];
+      li.innerHTML = coverHTML(p.name, p.name) +
+        "<span class='name'>" + esc(p.name) + "</span><span class='size'>" + p.count + "</span>";
+      li.appendChild(rowOverflow([
+        {
+          label: "Play",
+          run: () => {
+            const first = playlistTracks(p)[0];
+            playRemote(first, () => api("/api/play", { playlist: p.id }));
+          }
+        },
+        {
+          label: "Delete playlist",
+          run: async () => {
+            if (!confirm("Delete playlist “" + p.name + "”?")) return;
+            const st = await api("/api/playlists", { action: "delete", id: p.id });
+            last.playlists = st.playlists || [];
+            render();
+          }
+        }
+      ]));
+      li.onclick = (e) => {
+        if (e.target.closest(".row-more")) return;
+        playlistId = p.id;
         render();
       };
-      li.appendChild(play);
-      li.appendChild(del);
-      li.onclick = () => { playlistId = p.id; render(); };
       ul.appendChild(li);
     });
-    if (!playlists().length) ul.innerHTML = "<li class='empty'><span class='name'>No playlists yet — tap New playlist</span></li>";
+    if (!playlists().length) ul.appendChild(emptyState("No playlists yet", "Tap New playlist to start one, then add tracks from Artists, Albums, or Tracks."));
   } else if (view === "playlists" && playlistId) {
     const pl = playlists().filter((p) => p.id === playlistId)[0];
     if (!pl) { playlistId = ""; render(); return; }
@@ -518,7 +699,7 @@ function render() {
         }
       }));
     });
-    if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>Empty playlist — add tracks from Artists, Albums, or Tracks</span></li>";
+    if (!list.length) ul.appendChild(emptyState("This playlist is empty", "Add tracks from Artists, Albums, or Tracks."));
   } else {
     const list = viewTracks();
     if (list.length && (artist || album)) {
@@ -530,8 +711,8 @@ function render() {
       actions.appendChild(play);
     }
     list.forEach((t) => ul.appendChild(rowTrack(t, { order: list })));
-    if (!tracks().length) ul.innerHTML = "<li class='empty'><span class='name'>Library is empty — drop files above, or wait for the shelf host</span></li>";
-    else if (!list.length) ul.innerHTML = "<li class='empty'><span class='name'>No tracks match</span></li>";
+    if (!tracks().length) ul.appendChild(emptyState("Library is empty", "Drop files above, or wait for a linked shelf to share its catalog."));
+    else if (!list.length) ul.appendChild(emptyState("No tracks match", "Try a different search, artist, or album."));
   }
 }
 
@@ -549,19 +730,22 @@ $("btn-manage").onclick = () => {
 };
 $("manage-done").onclick = () => exitManage(true);
 $("sel-all").onclick = () => {
-  viewTracks().forEach((t) => { selected[t.name] = true; });
+  viewTracks().filter(isLocalRow).forEach((t) => { selected[t.name] = true; });
   render();
 };
 $("sel-none").onclick = () => { selected = {}; render(); };
 $("del-sel").onclick = async () => {
-  const names = selectedNames();
-  if (!names.length) return;
+  const names = ownedSelected();
+  if (!names.length) {
+    $("err").textContent = "Select tracks on this host to delete";
+    return;
+  }
   if (!confirm("Delete " + names.length + " selected track" + (names.length === 1 ? "" : "s") + " from this host?")) return;
   await deleteNames(names);
 };
 $("bulk-apply").onclick = async () => {
-  const names = selectedNames();
-  if (!names.length) { $("err").textContent = "Select tracks first"; return; }
+  const owned = ownedSelected();
+  if (!owned.length) { $("err").textContent = "Remote tracks are read-only on this host"; return; }
   const patch = {};
   const artist = ($("bulk-artist").value || "").trim();
   const album = ($("bulk-album").value || "").trim();
@@ -571,11 +755,11 @@ $("bulk-apply").onclick = async () => {
   if (genre) patch.genre = genre;
   if (!Object.keys(patch).length) { $("err").textContent = "Enter artist, album, or genre"; return; }
   const edits = {};
-  names.forEach((n) => { edits[n] = Object.assign({}, draft[n] || {}, patch); draft[n] = edits[n]; });
+  owned.forEach((n) => { edits[n] = Object.assign({}, draft[n] || {}, patch); draft[n] = edits[n]; });
   const st = await api("/api/library/manage", { edits: edits });
   if (!st.ok) { $("err").textContent = st.error || "could not save tags"; return; }
   last.tracks = st.tracks || last.tracks;
-  $("manage-hint").textContent = "Updated " + (st.edited || names.length) + " track" + (names.length === 1 ? "" : "s");
+  $("manage-hint").textContent = "Updated " + (st.edited || owned.length) + " track" + (owned.length === 1 ? "" : "s");
   $("err").textContent = "";
   render();
 };
@@ -585,9 +769,9 @@ function setJobBusy(on) {
   document.body.classList.toggle("job-busy", on);
   drop.classList.toggle("locked", on);
   $("file").disabled = on;
-  $("del-sel").disabled = on;
   $("btn-manage").disabled = on;
   $("manage-done").disabled = on;
+  syncManageActions();
 }
 function showJob() {
   $("job").classList.remove("hidden", "done", "fail");
@@ -613,10 +797,12 @@ function startJob(title, detail) {
   if (jobTimer) clearTimeout(jobTimer);
   showJob();
   setJobBusy(true);
+  $("job-fill").classList.remove("indeterminate");
   paintJob(0, title, detail, "Do not refresh or leave this page until this finishes.", "");
 }
 function finishJob(ok, title, detail) {
   setJobBusy(false);
+  $("job-fill").classList.remove("indeterminate");
   paintJob(100, title, detail, ok ? "Complete. You can leave this page." : "Finished with errors. You can leave this page.", ok ? "done" : "fail");
   hideJobLater();
 }
@@ -739,12 +925,12 @@ async function tick(force) {
     const peer = lib.peer || st.peer || {};
     const shelves = peer.shelves || [];
     $("hostline").textContent = p.name ? ("Now · " + titleOf({ name: p.name, title: "" })) : ((st.host || st.model || "SHR-S2") + " · TOSLINK");
+    const lead = $("lib-lead");
+    if (lead) lead.textContent = "Tap a track to play.";
     const shelfHint = $("shelf-hint");
     if (shelves.length) {
-      const label = shelves.map((s) => s.id || s.url).join(", ");
       shelfHint.hidden = false;
-      shelfHint.textContent = "Unison catalog with " + label + ". The stamp on each track is the chassis that holds the file. Play copies here, then this TOSLINK.";
-      if (peer.error) $("err").textContent = peer.error;
+      shelfHint.textContent = "Linked shelf — remote tracks copy here, then play.";
     } else {
       shelfHint.hidden = true;
     }
@@ -752,7 +938,9 @@ async function tick(force) {
     const n = (lib.tracks || []).length;
     const scan = lib.scanning ? " · reading tags" : "";
     $("disk").textContent = n + " track" + (n === 1 ? "" : "s") + " · " + pretty(d.free || 0) + " free" + scan;
-    $("err").textContent = "";
+    if (!jobBusy) {
+      $("err").textContent = (st.player && st.player.error) || peer.error || "";
+    }
     const tagged = (lib.tracks || []).reduce((acc, t) => acc + (t.tagged ? 1 : 0), 0);
     const homes = (lib.tracks || []).map((t) => (t.home_stamp || "") + (t.here ? "h" : "")).join("");
     const next = n + ":" + tagged + ":" + (lib.scanning ? 1 : 0) + ":" + view + ":" + artist + ":" + album + ":" + playlistId + ":" + q() + ":" + playingName() + ":" + (lib.playlists || []).map((x) => x.id + x.count).join(",") + ":" + homes;
@@ -765,8 +953,9 @@ async function tick(force) {
     $("err").textContent = "Host is not answering";
   }
 }
-tick(true);
-setInterval(() => tick(false), 2500);
+document.addEventListener("click", () => {
+  document.querySelectorAll(".row-menu").forEach((el) => el.classList.add("hidden"));
+});
 </script>
 </body>
 </html>

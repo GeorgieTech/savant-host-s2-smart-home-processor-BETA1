@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07060a">
+<meta name="theme-color" content="#030303">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CRYPT">
@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/crypt.css">
 </head>
-<body>
+<body class="playing-page">
 <div class="app">
   <header class="topbar">
     <div class="brand">
@@ -27,59 +27,45 @@
   </header>
   <main class="page">
     <section class="card nowcard">
-      <div class="section-head">
-        <h2>What’s playing</h2>
-        <span class="badge" id="state">Idle</span>
+      <div class="job hidden" id="copyjob" aria-live="polite">
+        <div class="job-head">
+          <div class="job-title" id="copy-title">Copying</div>
+          <div class="job-pct" id="copy-pct">…</div>
+        </div>
+        <div class="job-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="copy-bar">
+          <div class="job-fill indeterminate" id="copy-fill"></div>
+        </div>
+        <div class="job-detail" id="copy-detail"></div>
+        <div class="job-stay" id="copy-stay">Copy-then-play — this TOSLINK waits for the file.</div>
       </div>
       <div class="viz-wrap" id="vizwrap">
-        <canvas id="viz" aria-label="Playback visualizer"></canvas>
+        <canvas id="viz" aria-label="Album art visualizer"></canvas>
         <audio id="tap" playsinline webkit-playsinline preload="auto"></audio>
       </div>
-      <div class="now" id="now">Nothing playing</div>
-      <div class="meta" id="meta">0:00 / 0:00</div>
-      <div class="clock-stats" id="clockstats">
-        <div class="clock-hero">
-          <div class="clk-delta" id="clk-off">—</div>
-          <div class="clk-delta-l" id="clk-off-l">Time Clock vs playback</div>
+      <div class="now-block">
+        <div class="now-line">
+          <span class="live-dot" id="state" aria-label="Idle"></span>
+          <div class="now" id="now">Nothing playing</div>
         </div>
-        <div class="clock-times">
-          <div class="clock-col heard">
-            <span class="k">Time Clock</span>
-            <span class="v" id="clk-heard">0:00.000</span>
-            <span class="clk-sub">what you hear</span>
-          </div>
-          <div class="clock-col play">
-            <span class="k">Playback</span>
-            <span class="v" id="clk-play">0:00.000</span>
-            <span class="clk-sub">decoder</span>
-          </div>
+        <div class="now-artist" id="nowartist">Pick a track in Library</div>
+        <div class="now-meta-row">
+          <div class="meta" id="meta">0:00 / 0:00</div>
+          <button class="ghost stop-inline" id="stopbtn" type="button">Stop</button>
         </div>
-        <div class="clock-lane" id="clk-lane" aria-hidden="true">
-          <div class="clock-lane-span" id="clk-span"></div>
-          <div class="clock-mark heard" id="clk-mark-h"></div>
-          <div class="clock-mark play" id="clk-mark-p"></div>
-        </div>
-        <div class="clock-legend">
-          <span class="heard">Time Clock</span>
-          <span class="play">Playback</span>
-          <span id="clk-lock">idle</span>
-        </div>
-        <div class="clock-meter">
-          <div>
-            <span class="k">Word clock</span>
-            <span class="v" id="clk-rate">48.000 kHz</span>
-          </div>
-          <div>
-            <span class="k">Jitter</span>
-            <span class="v" id="clk-jit">—</span>
-          </div>
-          <div>
-            <span class="k">Steer</span>
-            <span class="v" id="clk-ppm">—</span>
-          </div>
-        </div>
-        <p class="clock-note" id="clk-note">Host Time Clock vs decoder timing</p>
       </div>
+      <div class="mode-row" id="moderow" hidden>
+        <div class="mode-chip" role="group" aria-label="Solo or Unison optical">
+          <button type="button" id="mode-solo">Solo</button>
+          <button type="button" id="mode-unison">Unison</button>
+        </div>
+        <span class="mode-badge" id="modebadge" hidden></span>
+      </div>
+      <div class="transport">
+        <button class="icon" id="prevbtn" type="button" aria-label="Previous">⟨⟨</button>
+        <button class="playbig primary" id="playbtn" type="button" aria-label="Play">Play</button>
+        <button class="icon" id="nextbtn" type="button" aria-label="Next">⟩⟩</button>
+      </div>
+      <p class="follow-hint" id="followhint" hidden>Follow owns transport — tap Solo to leave.</p>
       <div class="wave-scroll-wrap">
         <canvas id="wscroll" aria-label="3-band waveform"></canvas>
         <div class="wave-progress hidden" id="waveprog">
@@ -90,6 +76,56 @@
           <div class="wave-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="wavebar">
             <div class="wave-progress-fill" id="wavefill"></div>
           </div>
+        </div>
+      </div>
+      <div class="wave-over-wrap" id="seek">
+        <canvas id="wover" aria-label="Track overview"></canvas>
+      </div>
+      <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100"></div>
+      <details class="clock-pro" id="clockpro">
+        <summary>Time Clock / Pro</summary>
+        <div class="clock-stats" id="clockstats">
+          <div class="clock-hero">
+            <div class="clk-delta" id="clk-off">—</div>
+            <div class="clk-delta-l" id="clk-off-l">Time Clock vs playback</div>
+          </div>
+          <div class="clock-times">
+            <div class="clock-col heard">
+              <span class="k">Time Clock</span>
+              <span class="v" id="clk-heard">0:00.000</span>
+              <span class="clk-sub">what you hear</span>
+            </div>
+            <div class="clock-col play">
+              <span class="k">Playback</span>
+              <span class="v" id="clk-play">0:00.000</span>
+              <span class="clk-sub">decoder</span>
+            </div>
+          </div>
+          <div class="clock-lane" id="clk-lane" aria-hidden="true">
+            <div class="clock-lane-span" id="clk-span"></div>
+            <div class="clock-mark heard" id="clk-mark-h"></div>
+            <div class="clock-mark play" id="clk-mark-p"></div>
+          </div>
+          <div class="clock-legend">
+            <span class="heard">Time Clock</span>
+            <span class="play">Playback</span>
+            <span id="clk-lock">idle</span>
+          </div>
+          <div class="clock-meter">
+            <div>
+              <span class="k">Word clock</span>
+              <span class="v" id="clk-rate">48.000 kHz</span>
+            </div>
+            <div>
+              <span class="k">Jitter</span>
+              <span class="v" id="clk-jit">—</span>
+            </div>
+            <div>
+              <span class="k">Steer</span>
+              <span class="v" id="clk-ppm">—</span>
+            </div>
+          </div>
+          <p class="clock-note" id="clk-note">Host Time Clock vs decoder timing</p>
         </div>
         <div class="wave-legend">
           <span class="lo">Lows</span>
@@ -102,23 +138,10 @@
             <button type="button" class="ghost zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
           </span>
         </div>
-      </div>
-      <div class="wave-over-wrap" id="seek">
-        <canvas id="wover" aria-label="Track overview"></canvas>
-      </div>
-      <div class="transport">
-        <button class="icon" onclick="api('/api/prev')" aria-label="Previous">⟨⟨</button>
-        <button class="playbig primary" id="playbtn" onclick="toggle()">Play</button>
-        <button class="icon" onclick="api('/api/next')" aria-label="Next">⟩⟩</button>
-      </div>
-      <div class="row center">
-        <button class="ghost" onclick="api('/api/stop')">Stop</button>
-        <button type="button" class="unison-btn" id="unison" hidden>Unison TOSLINK</button>
-      </div>
-      <div class="vol">Volume <input id="vol" type="range" min="0" max="100" value="100"></div>
+      </details>
       <div class="err" id="err"></div>
     </section>
-    <section class="card">
+    <section class="card queue-card">
       <div class="section-head">
         <h2>Up next</h2>
         <span class="meta tight" id="qmeta"></span>
@@ -255,24 +278,206 @@ function syncTap(p, playing) {
     try { tap.audio.pause(); } catch (e) {}
   }
 }
+let libByName = {};
+let libAt = 0;
+let copyBusy = false;
+let copyTimer = 0;
+let copyHide = 0;
+let copyStarted = 0;
+
+function followingUnison() {
+  return !!(last.unison || {}).following;
+}
+function followerLockTitle() {
+  return followingUnison() ? "Follow owns transport — tap Solo to leave." : "";
+}
+function lockFollowerTransport() {
+  const lock = followingUnison();
+  const title = followerLockTitle();
+  const p = last.player || {};
+  ["prevbtn", "nextbtn", "stopbtn"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.disabled = lock;
+    el.setAttribute("aria-disabled", lock ? "true" : "false");
+    if (title) el.title = title;
+    else el.removeAttribute("title");
+  });
+  const play = $("playbtn");
+  if (play) {
+    const idleLock = lock && !p.playing && !p.paused;
+    play.disabled = idleLock;
+    play.setAttribute("aria-disabled", idleLock ? "true" : "false");
+    if (idleLock) play.title = title;
+    else play.removeAttribute("title");
+  }
+  const hint = $("followhint");
+  if (hint) hint.hidden = !lock;
+  document.body.classList.toggle("follow-lock", lock);
+}
+function isRemote(t) {
+  if (!t) return false;
+  if (t.local === false) return true;
+  if (t.here === false && t.local !== true) return true;
+  return false;
+}
+function copyStamp(t) {
+  return (t && (t.home_stamp || t.owner)) || "shelf";
+}
+async function ensureLib(force) {
+  const now = Date.now();
+  if (!force && now - libAt < 12000 && Object.keys(libByName).length) return;
+  try {
+    const lib = await (await fetch("/api/library")).json();
+    const map = {};
+    (lib.tracks || []).forEach((t) => { if (t && t.name) map[t.name] = t; });
+    libByName = map;
+    libAt = now;
+  } catch (e) {}
+}
+function paintCopyJob(pct, title, detail, stay, state) {
+  const el = $("copyjob");
+  if (!el) return;
+  const n = Math.max(0, Math.min(100, Math.round(pct)));
+  $("copy-title").textContent = title;
+  $("copy-pct").textContent = state === "wait" ? "…" : (n + "%");
+  $("copy-fill").style.width = n + "%";
+  $("copy-fill").classList.toggle("indeterminate", state === "wait");
+  $("copy-bar").setAttribute("aria-valuenow", String(n));
+  $("copy-detail").textContent = detail || "";
+  $("copy-stay").textContent = stay;
+  el.classList.toggle("done", state === "done");
+  el.classList.toggle("fail", state === "fail");
+}
+function showCopyJob(stamp, track) {
+  const el = $("copyjob");
+  if (!el) return;
+  if (copyHide) { clearTimeout(copyHide); copyHide = 0; }
+  copyBusy = true;
+  copyStarted = Date.now();
+  el.classList.remove("hidden", "done", "fail");
+  const label = track ? (track.title || titleOf(track.name)) : "";
+  paintCopyJob(8, "Copying", "Copying from " + stamp + (label ? (" · " + label) : "") + "…", "Copy-then-play — this TOSLINK waits for the file.", "wait");
+  if (copyTimer) clearInterval(copyTimer);
+  copyTimer = setInterval(() => {
+    if (!copyBusy) return;
+    const sec = (Date.now() - copyStarted) / 1000;
+    const pct = Math.min(88, 8 + sec * 10);
+    paintCopyJob(pct, "Copying", $("copy-detail").textContent, "Copy-then-play — this TOSLINK waits for the file.", "wait");
+  }, 400);
+}
+function finishCopyJob(ok, detail) {
+  copyBusy = false;
+  if (copyTimer) { clearInterval(copyTimer); copyTimer = 0; }
+  const el = $("copyjob");
+  if (!el) return;
+  paintCopyJob(100, ok ? "Ready" : "Failed", detail || (ok ? "Playing from this host." : "could not copy from shelf"), ok ? "Complete." : "Finished with errors.", ok ? "done" : "fail");
+  copyHide = setTimeout(() => {
+    if (!copyBusy) el.classList.add("hidden");
+  }, ok ? 1600 : 8000);
+}
+async function withCopyFeedback(track, requestFn) {
+  const remote = isRemote(track);
+  let shown = remote;
+  let late = 0;
+  if (remote) showCopyJob(copyStamp(track), track);
+  else {
+    late = setTimeout(() => {
+      if (track && isRemote(track)) {
+        shown = true;
+        showCopyJob(copyStamp(track), track);
+      }
+    }, 400);
+  }
+  try {
+    const res = await requestFn();
+    if (late) clearTimeout(late);
+    if (shown) {
+      if (res && res.ok === false) finishCopyJob(false, res.error || "could not copy from shelf");
+      else finishCopyJob(true, track ? (track.title || titleOf(track.name)) : "");
+    }
+    return res;
+  } catch (e) {
+    if (late) clearTimeout(late);
+    if (shown) finishCopyJob(false, "Host is not answering");
+    throw e;
+  }
+}
 async function toggle() {
   unlockAudio();
   const p = last.player || {};
   if (p.playing) await api("/api/pause");
   else if (p.paused) await api("/api/resume");
-  else if (p.name) await api("/api/play", { name: p.name });
-  else if ((last.count || 0) > 0) await api("/api/next");
+  else if (followingUnison()) {
+    $("err").textContent = followerLockTitle();
+    return;
+  } else if (p.name) {
+    await ensureLib();
+    await withCopyFeedback(libByName[p.name], () => api("/api/play", { name: p.name }));
+  } else if ((last.count || 0) > 0) {
+    await ensureLib();
+    const nxt = (last.queue || [])[0];
+    await withCopyFeedback(nxt && libByName[nxt.name], () => api("/api/next"));
+  }
   tick();
 }
-const unisonBtn = $("unison");
-if (unisonBtn) {
-  unisonBtn.onclick = async () => {
-    const on = !((last.unison || {}).on);
-    await api("/api/unison", { on: on });
-    tick();
-  };
+async function setUnison(on) {
+  await api("/api/unison", { on: !!on });
+  tick();
 }
-async function playName(name) { unlockAudio(); await api("/api/play", { name }); tick(); }
+const modeSolo = $("mode-solo");
+const modeUni = $("mode-unison");
+if (modeSolo) modeSolo.onclick = () => setUnison(false);
+if (modeUni) modeUni.onclick = () => setUnison(true);
+async function playName(name) {
+  if (followingUnison()) {
+    $("err").textContent = followerLockTitle();
+    return;
+  }
+  unlockAudio();
+  await ensureLib();
+  await withCopyFeedback(libByName[name], () => api("/api/play", { name: name }));
+  tick();
+}
+async function goPrev() {
+  if (followingUnison()) {
+    $("err").textContent = followerLockTitle();
+    return;
+  }
+  unlockAudio();
+  await api("/api/prev");
+  tick();
+}
+async function goNext() {
+  if (followingUnison()) {
+    $("err").textContent = followerLockTitle();
+    return;
+  }
+  unlockAudio();
+  await ensureLib();
+  const nxt = (last.queue || [])[0];
+  await withCopyFeedback(nxt && libByName[nxt.name], () => api("/api/next"));
+  tick();
+}
+async function goStop() {
+  if (followingUnison()) {
+    $("err").textContent = followerLockTitle();
+    return;
+  }
+  await api("/api/stop");
+  tick();
+}
+if ($("prevbtn")) $("prevbtn").onclick = goPrev;
+if ($("nextbtn")) $("nextbtn").onclick = goNext;
+if ($("stopbtn")) $("stopbtn").onclick = goStop;
+if ($("playbtn")) $("playbtn").onclick = toggle;
+const clockPro = $("clockpro");
+if (clockPro) {
+  clockPro.addEventListener("toggle", () => {
+    document.body.classList.toggle("pro-open", clockPro.open);
+    sizeViz();
+  });
+}
 let volUser = false;
 let volPending = null;
 let volBusy = false;
@@ -633,18 +838,18 @@ function drawViz(ts) {
 
   ctx.clearRect(0, 0, w, h);
   const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, "rgba(155,28,28,0.16)");
-  g.addColorStop(0.55, "rgba(7,6,10,0.08)");
-  g.addColorStop(1, "rgba(7,6,10,0.92)");
+  g.addColorStop(0, "rgba(255,43,43,0.16)");
+  g.addColorStop(0.45, "rgba(18,18,18,0.4)");
+  g.addColorStop(1, "rgba(3,3,3,0.98)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
   const cx = w / 2;
   const cy = h * 0.58;
   const rg = ctx.createRadialGradient(cx, cy, 4, cx, cy, h * 0.7);
-  rg.addColorStop(0, "rgba(224,122,58," + (0.18 + energy * 0.35) + ")");
-  rg.addColorStop(0.35, "rgba(155,28,28," + (0.12 + energy * 0.18) + ")");
-  rg.addColorStop(1, "rgba(7,6,10,0)");
+  rg.addColorStop(0, "rgba(255,255,255," + (0.08 + energy * 0.18) + ")");
+  rg.addColorStop(0.4, "rgba(255,43,43," + (0.10 + energy * 0.16) + ")");
+  rg.addColorStop(1, "rgba(3,3,3,0)");
   ctx.fillStyle = rg;
   ctx.fillRect(0, 0, w, h);
 
@@ -654,11 +859,11 @@ function drawViz(ts) {
     const x = gap + i * (bw + gap);
     const y = h - bh - h * 0.08;
     const bar = ctx.createLinearGradient(0, y, 0, h);
-    bar.addColorStop(0, "#f3c07a");
-    bar.addColorStop(0.35, "#e07a3a");
-    bar.addColorStop(1, "#5c1010");
+    bar.addColorStop(0, "#ffffff");
+    bar.addColorStop(0.45, "#ff6b6b");
+    bar.addColorStop(1, "#5a0000");
     ctx.fillStyle = bar;
-    ctx.globalAlpha = 0.55 + energy * 0.45;
+    ctx.globalAlpha = 0.62 + energy * 0.38;
     ctx.fillRect(x, y, Math.max(1, bw), bh);
   }
   ctx.globalAlpha = 1;
@@ -901,20 +1106,27 @@ function renderQueue(st) {
   $("qmeta").textContent = total ? Math.min(items.length, 5) + " of " + total : "";
   if (!items.length) {
     const li = document.createElement("li");
-    li.className = "empty";
+    li.className = "empty empty-state";
     li.innerHTML = (st.count || 0)
-      ? "<span class='name'>End of the queue</span>"
-      : "<span class='name'>Nothing queued — add tracks in Library</span>";
+      ? "<span class='empty-title'>End of the queue</span><span class='empty-detail'>Add more in Library, or play a playlist.</span>"
+      : "<span class='empty-title'>Nothing queued</span><span class='empty-detail'>Open Library to play a track or playlist.</span>";
     ul.appendChild(li);
     $("qmore").hidden = true;
     return;
   }
+  const lock = followingUnison();
   items.slice(0, 5).forEach((t, i) => {
     const li = document.createElement("li");
     li.innerHTML =
       "<span class='idx'>" + (i + 1) + "</span>" +
       "<span class='name'>" + esc(t.title || titleOf(t.name)) + "</span>";
-    li.onclick = () => playName(t.name);
+    if (lock) {
+      li.classList.add("locked");
+      li.title = followerLockTitle();
+      li.setAttribute("aria-disabled", "true");
+    } else {
+      li.onclick = () => playName(t.name);
+    }
     ul.appendChild(li);
   });
   if (total > items.length) {
@@ -937,25 +1149,41 @@ async function tick() {
     viz.vol = ((st.volume == null ? 100 : st.volume) / 100);
     syncTap(p, playing);
     const u = st.unison || {};
-    const uni = $("unison");
-    if (uni) {
+    lockFollowerTransport();
+    const modeRow = $("moderow");
+    const modeBadge = $("modebadge");
+    if (modeRow) {
       if (u.linked > 0) {
-        uni.hidden = false;
-        uni.classList.toggle("on", !!u.on);
-        if (!u.on) uni.textContent = "Unison off";
-        else if (u.following) uni.textContent = "Unison · follow " + (u.conductor_stamp || "peer");
-        else uni.textContent = "Unison on";
+        modeRow.hidden = false;
+        if (modeSolo) modeSolo.classList.toggle("on", !u.on);
+        if (modeUni) modeUni.classList.toggle("on", !!u.on);
+        if (modeBadge) {
+          const bits = [];
+          if (!u.on) bits.push("Solo · shelf linked");
+          else if (u.following) bits.push("Follow " + (u.conductor_stamp || "peer"));
+          else bits.push("Unison optical");
+          if (u.on && u.drift_ms != null) bits.push(u.drift_ms + " ms");
+          modeBadge.textContent = bits.join(" · ");
+          modeBadge.hidden = false;
+          modeBadge.className = "mode-badge" + (u.on ? (u.following ? " follow" : " lock") : "");
+        }
       } else {
-        uni.hidden = true;
+        modeRow.hidden = true;
+        if (modeBadge) modeBadge.hidden = true;
       }
     }
     let line = (st.model || "SHR-S2") + " · TOSLINK";
-    if (u.on && playing) {
-      line = "Unison TOSLINK";
+    if (u.on && u.linked > 0) {
+      line = u.following ? ("Follow " + (u.conductor_stamp || "peer")) : "Unison optical";
       if (u.drift_ms != null) line += " · " + u.drift_ms + " ms";
     }
     $("hostline").textContent = line;
-    $("now").textContent = p.name ? titleOf(p.name) : "Nothing playing";
+    const row = (p.name && libByName[p.name]) || {};
+    $("now").textContent = p.name ? (row.title || titleOf(p.name)) : "Nothing playing";
+    const artistEl = $("nowartist");
+    if (artistEl) {
+      artistEl.textContent = p.name ? (row.artist || "Unknown artist") : "Pick a track in Library";
+    }
     const ck = p.clock || {};
     const heard = (ck.heard != null ? ck.heard : p.position) || 0;
     const playback = (ck.playback != null ? ck.playback : p.playback) || heard;
@@ -964,11 +1192,13 @@ async function tick() {
     paintClockStats(heard, playback, true);
     loadWave(p.name || "");
     $("playbtn").textContent = playing ? "Pause" : "Play";
-    $("err").textContent = p.error || "";
+    $("playbtn").setAttribute("aria-label", playing ? "Pause" : "Play");
+    if (!copyBusy) $("err").textContent = p.error || "";
     if (!volUser) $("vol").value = st.volume == null ? 100 : st.volume;
     const badge = $("state");
-    badge.className = "badge " + (playing ? "live" : paused ? "seen" : "dead");
-    badge.textContent = playing ? "Playing" : paused ? "Paused" : "Idle";
+    badge.className = "live-dot " + (playing ? "live" : paused ? "seen" : "dead");
+    badge.textContent = "";
+    badge.setAttribute("aria-label", playing ? "Playing" : paused ? "Paused" : "Idle");
     $("vizwrap").classList.toggle("live", playing);
     document.body.classList.toggle("is-playing", playing);
     renderQueue(st);
@@ -989,8 +1219,10 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 startViz();
+ensureLib(true);
 tick();
 setInterval(tick, 1000);
+setInterval(() => ensureLib(false), 15000);
 async function tickClock() {
   if (document.hidden) return;
   try {

@@ -4,8 +4,8 @@
   "description": "S2 Smart Home Processor",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#07060a",
-  "theme_color": "#07060a",
+  "background_color": "#030303",
+  "theme_color": "#030303",
   "icons": [
     { "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
