@@ -3,10 +3,13 @@
 import json
 import os
 import shutil
+import socket
 import tempfile
+import time
 import unittest
 
 import peers
+import unison
 
 
 class UrlGuardTests(unittest.TestCase):
@@ -293,6 +296,149 @@ def load_cfg():
         "id": "crypt-viewer",
         "shelves": [{"id": "crypt-001aae10e4090000", "url": "http://192.168.1.179", "uid": "001AAE10E4090000"}],
     }
+
+
+class _FakeBeaconSock(object):
+    """UDP stand-in so start() / _beacon_loop never touch a real port."""
+
+    def __init__(self):
+        self.sent = []
+
+    def setsockopt(self, *args, **kwargs):
+        return None
+
+    def settimeout(self, value):
+        return None
+
+    def bind(self, addr):
+        return None
+
+    def sendto(self, data, dest):
+        self.sent.append((data, dest))
+        return len(data)
+
+    def recvfrom(self, n):
+        raise socket.timeout()
+
+    def close(self):
+        return None
+
+
+class IgmpJoinTests(unittest.TestCase):
+    def _index(self):
+        return peers.PeerIndex(
+            path="/no/such.json",
+            http=lambda url: {},
+            seen_path="/no/such/seen.json",
+            hot_path="/no/such/hot.json",
+        )
+
+    def test_fleet_exposes_igmp_fields_before_start(self):
+        idx = self._index()
+        beacon = idx.fleet()["beacon"]
+        self.assertFalse(beacon["listening"])
+        self.assertFalse(beacon["igmp_ok"])
+        self.assertEqual(beacon["igmp_error"], "")
+        self.assertEqual(beacon["error"], "")
+
+    def _patch_start(self, fake, join):
+        orig = (peers.socket.socket, peers.crypt_wire.join_group, peers._lan_ip)
+        peers.socket.socket = lambda *a, **k: fake
+        peers.crypt_wire.join_group = join
+        peers._lan_ip = lambda: "192.168.1.179"
+        return orig
+
+    def _unpatch_start(self, orig):
+        peers.socket.socket, peers.crypt_wire.join_group, peers._lan_ip = orig
+        peers._ident_cache["t"] = 0.0
+        peers._ident_cache["row"] = None
+
+    def test_join_failure_survives_successful_send(self):
+        idx = self._index()
+        fake = _FakeBeaconSock()
+
+        def boom(*args, **kwargs):
+            raise OSError("No such device")
+
+        orig = self._patch_start(fake, boom)
+        try:
+            idx.start()
+            self.assertFalse(idx.igmp_ok)
+            self.assertIn("No such device", idx.igmp_error)
+            deadline = time.time() + 2.5
+            while not idx.beacon_ok and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(idx.beacon_ok)
+            self.assertTrue(fake.sent)
+            self.assertFalse(idx.igmp_ok)
+            self.assertIn("No such device", idx.igmp_error)
+            beacon = idx.fleet()["beacon"]
+            self.assertTrue(beacon["listening"])
+            self.assertFalse(beacon["igmp_ok"])
+            self.assertIn("No such device", beacon["igmp_error"])
+        finally:
+            idx.stop()
+            self._unpatch_start(orig)
+
+    def test_join_success_sets_igmp_ok(self):
+        idx = self._index()
+        fake = _FakeBeaconSock()
+        orig = self._patch_start(fake, lambda *a, **k: None)
+        try:
+            idx.start()
+            self.assertTrue(idx.igmp_ok)
+            self.assertEqual(idx.igmp_error, "")
+            deadline = time.time() + 2.5
+            while not idx.beacon_ok and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(idx.beacon_ok)
+            self.assertTrue(idx.igmp_ok)
+            self.assertEqual(idx.igmp_error, "")
+            beacon = idx.fleet()["beacon"]
+            self.assertTrue(beacon["igmp_ok"])
+            self.assertEqual(beacon["igmp_error"], "")
+        finally:
+            idx.stop()
+            self._unpatch_start(orig)
+
+
+class UnisonClockViaTests(unittest.TestCase):
+    def test_snapshot_via_http_clock_when_udp_quiet(self):
+        folder = tempfile.mkdtemp(prefix="crypt-unison-")
+        try:
+            path = os.path.join(folder, "sync.json")
+            u = unison.Unison(path=path, post=lambda *a, **k: {}, get=lambda *a, **k: {})
+            try:
+                with u.lock:
+                    u._on = True
+                    u._follow_url = "http://192.168.1.179"
+                    u._follow_uid = "001AAE10E4090000"
+                    u._clock_at = 0.0
+                snap = u.snapshot()
+                self.assertTrue(snap["following"])
+                self.assertEqual(snap["via"], "http-clock")
+                with u.lock:
+                    u._clock_at = time.time()
+                snap = u.snapshot()
+                self.assertEqual(snap["via"], "udp")
+            finally:
+                u._alive = False
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_snapshot_via_empty_when_not_following(self):
+        folder = tempfile.mkdtemp(prefix="crypt-unison-")
+        try:
+            path = os.path.join(folder, "sync.json")
+            u = unison.Unison(path=path, post=lambda *a, **k: {}, get=lambda *a, **k: {})
+            try:
+                snap = u.snapshot()
+                self.assertFalse(snap["following"])
+                self.assertEqual(snap["via"], "")
+            finally:
+                u._alive = False
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 if __name__ == "__main__":

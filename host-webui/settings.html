@@ -194,6 +194,7 @@ async function loadUnison() {
     const bits = [];
     if (u.linked) bits.push(u.linked + " linked");
     if (u.following) bits.push("follow " + (u.conductor_stamp || "peer"));
+    if (u.via) bits.push(u.via);
     if (u.drift_ms != null) bits.push(u.drift_ms + " ms");
     $("uni-meta").textContent = bits.join(" · ");
   } catch (e) {}
@@ -228,10 +229,14 @@ function render(data) {
   if (!hosts.length) {
     rack.innerHTML = '<p class="hint">No chassis in the roster yet.</p>';
   }
-  const berr = (data.beacon || {}).error;
-  if (data.error) $("err").textContent = data.error;
-  else if (berr) $("err").textContent = "Beacon: " + berr;
-  else $("err").textContent = "";
+  const beacon = data.beacon || {};
+  const bits = [];
+  if (beacon.igmp_error) {
+    bits.push("IGMP join failed: " + beacon.igmp_error);
+  }
+  if (data.error) bits.push(data.error);
+  else if (beacon.error) bits.push("Beacon: " + beacon.error);
+  $("err").textContent = bits.join(" · ");
 }
 async function loadFleet(probe) {
   if (busy) return;

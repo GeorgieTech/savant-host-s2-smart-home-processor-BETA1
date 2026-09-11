@@ -465,6 +465,8 @@ class PeerIndex(object):
         self._sock = None
         self.beacon_ok = False
         self.beacon_error = ""
+        self.igmp_ok = False
+        self.igmp_error = ""
         self.error = ""
         self._own_libver = 0
         self._own_tracks = 0
@@ -1101,6 +1103,8 @@ class PeerIndex(object):
                 "port": BEACON_PORT,
                 "listening": bool(self.beacon_ok),
                 "error": self.beacon_error,
+                "igmp_ok": bool(self.igmp_ok),
+                "igmp_error": self.igmp_error,
             },
             "error": self.error,
         }
@@ -1226,6 +1230,7 @@ class PeerIndex(object):
                     sock.sendto(self._beacon_bin(seq), (crypt_wire.GROUP, BEACON_PORT))
                     sock.sendto(self._beacon_payload(), (BROADCAST, BEACON_PORT))
                     self.beacon_ok = True
+                    # Send does not require IGMP membership. Do not clear a join failure.
                     self.beacon_error = ""
                 except Exception as exc:
                     self.beacon_error = str(exc)
@@ -1273,7 +1278,11 @@ class PeerIndex(object):
         try:
             crypt_wire.join_group(sock, iface=_lan_ip() or "0.0.0.0")
         except OSError as exc:
-            self.beacon_error = str(exc)
+            self.igmp_ok = False
+            self.igmp_error = str(exc)
+        else:
+            self.igmp_ok = True
+            self.igmp_error = ""
         self._sock = sock
         self._alive = True
         self._thread = threading.Thread(target=self._beacon_loop, name="crypt-beacon")

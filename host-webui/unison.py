@@ -73,6 +73,11 @@ class Unison(object):
         linked = len((PEERS.config().get("shelves") or []))
         with self.lock:
             following = bool(self._follow_url)
+            clock_age = time.time() - self._clock_at if self._clock_at else 999
+            via = ""
+            if following:
+                # UDP CLOCK is the hot path. HTTP /api/clock is the >250 ms fallback.
+                via = "udp" if clock_age <= 0.25 else "http-clock"
             return {
                 "on": bool(self._on),
                 "linked": linked,
@@ -80,6 +85,7 @@ class Unison(object):
                 "conductor": self._follow_uid,
                 "conductor_stamp": stamp(self._follow_uid) if self._follow_uid else "",
                 "drift_ms": self._drift_ms,
+                "via": via,
             }
 
     def set_on(self, on):
