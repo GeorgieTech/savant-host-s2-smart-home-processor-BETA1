@@ -51,9 +51,38 @@ systemctl restart crypt-hostname.service crypt-pulse.service crypt-web.service
 
 Open http://192.168.1.179/
 
+## Unison / CRYPT/1 same-session minimum
+
+The first-time `scp` above is the full install (UI HTML, units, icons). Incremental Unison / CRYPT/1 fixes need a smaller set on **both** hosts in **one session**. Copying only `server.py` / `index.html`, or updating one chassis, leaves mixed-version Unison slap.
+
+Minimum files:
+
+- `crypt_wire.py`
+- `peers.py`
+- `unison.py`
+- `player.py`
+- `server.py`
+
+```sh
+scp -O host-webui/crypt_wire.py host-webui/peers.py host-webui/unison.py host-webui/player.py host-webui/server.py \
+  RPM@192.168.1.179:/tmp/ RPM@192.168.1.142:/tmp/
+```
+
+On **each** host, as root via `sudo env bash`:
+
+```sh
+cp /tmp/crypt_wire.py /tmp/peers.py /tmp/unison.py /tmp/player.py /tmp/server.py /data/www/
+chown RPM:RPM /data/www/crypt_wire.py /data/www/peers.py /data/www/unison.py /data/www/player.py /data/www/server.py
+systemctl restart crypt-web.service
+```
+
+Restart **.179 and .142 within a minute of each other**. Pulse / hostname units stay.
+
+After both are up, run the earshot / wire checks in [PEER-PROTOCOL.md](PEER-PROTOCOL.md): `ss -ulnp | grep 41880` (crypt-web bound on `:41880`), multicast recv on `239.18.20.1:41880`, Unison `drift_ms` hold near 0 (not ±400 ms slap).
+
 ## Constraints
 
 - No `apt`. Yocto image.
 - Python 3.8 stdlib only.
-- DualLite / 1 GB — keep V1.1.7 to library + TOSLINK. No extra daemons. No SSC expanders.
+- DualLite / 1 GB — keep V1.1.12 to library + TOSLINK. No extra daemons. No SSC expanders.
 - Optional meaning essay: put `XAI_API_KEY=...` in `/data/crypt/xai.env` (not in git). The unit already reads that file. Without it, Research still writes a sourced essay from Wikipedia and local lyrics.
